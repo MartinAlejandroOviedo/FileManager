@@ -3,6 +3,7 @@ import 'package:flutter/painting.dart';
 import 'package:file_manager/ui/niceos_theme.dart';
 import 'package:file_manager/ui/splash_screen.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:file_manager/ui/theme_controller.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -10,7 +11,9 @@ void main() {
   final imageCache = PaintingBinding.instance.imageCache;
   imageCache.maximumSizeBytes = 256 << 20;
   imageCache.maximumSize = 2000;
-  runApp(const FileManagerApp());
+  themeController.load().then((_) {
+    runApp(const FileManagerApp());
+  });
 }
 
 class FileManagerApp extends StatelessWidget {
@@ -18,10 +21,15 @@ class FileManagerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'File Manager',
-      theme: NiceOSTheme.themeData,
-      home: const SplashScreen(),
+    return AnimatedBuilder(
+      animation: themeController,
+      builder: (context, _) => MaterialApp(
+        title: 'File Manager',
+        theme: NiceOSTheme.lightThemeData,
+        darkTheme: NiceOSTheme.themeData,
+        themeMode: themeController.mode,
+        home: const SplashScreen(),
+      ),
     );
   }
 }

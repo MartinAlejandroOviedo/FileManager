@@ -14,6 +14,7 @@ import 'package:file_manager/utils/search_utils.dart';
 import 'package:lottie/lottie.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:file_manager/ui/theme_controller.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -46,6 +47,7 @@ class _PaneData {
   String searchQuery;
   Map<String, List<FileItem>> searchIndex;
   String? errorMessage;
+  String? gitRoot;
   bool isEditingPath;
   List<String> history;
   int historyIndex;
@@ -72,6 +74,17 @@ class _MainScreenState extends State<MainScreen> {
   bool _showDetailsPanel = true;
   bool _showHidden = false;
   bool _dualPane = true;
+  bool _globalSearchEnabled = false;
+  bool _globalSearchLoading = false;
+  String? _globalSearchError;
+  List<FileItem> _globalSearchItems = [];
+  Map<String, List<FileItem>> _globalSearchIndex = {};
+  List<String> _globalSearchRoots = [];
+  DateTime? _globalSearchBuiltAt;
+  final Map<String, String> _tagsByPath = {};
+  final List<_RenamePreset> _renamePresets = [];
+  final Map<String, String> _gitStatusByPath = {};
+  String _dragDropDefaultAction = 'ask';
   List<String> _memoryClipboardPaths = [];
   bool _memoryClipboardAsRoot = false;
   bool _memoryClipboardIsCut = false;
@@ -85,6 +98,8 @@ class _MainScreenState extends State<MainScreen> {
   int _tabCounter = 0;
   String _versionLabel = '';
   final Map<String, String> _archiveCache = {};
+  final Map<String, int> _historyVisits = {};
+  final Map<String, DateTime> _historyLastVisited = {};
   late final _PaneData _leftPane;
   late final _PaneData _rightPane;
   bool _isRightActive = false;
@@ -136,6 +151,7 @@ class _MainScreenState extends State<MainScreen> {
   void initState() {
     super.initState();
     _homePath = Platform.environment['HOME'] ?? '/home';
+    _globalSearchRoots = [_homePath];
     _leftPane = _PaneData(currentPath: _homePath);
     _rightPane = _PaneData(currentPath: _homePath);
     _loadSettings();
@@ -151,6 +167,9 @@ class _MainScreenState extends State<MainScreen> {
     _loadVersion();
     _loadFilesForPane(_leftPane);
     _loadFilesForPane(_rightPane);
+    if (_globalSearchEnabled && _searchQuery.trim().isNotEmpty) {
+      _ensureGlobalSearchIndex();
+    }
   }
 
   Future<void> _loadVersion() async {
@@ -472,6 +491,7 @@ class _MainScreenState extends State<MainScreen> {
           (path) => pane.items.every((item) => item.path != path),
         );
       });
+      await _updateGitStatusForPane(pane);
       _syncActiveTab();
     } catch (error) {
       setState(() {
@@ -507,6 +527,86 @@ class _MainScreenState extends State<MainScreen> {
     return items;
   }
 
+  Future<void> _updateGitStatusForPane(_PaneData pane) async {
+    if (_isVirtualPath(pane.currentPath)) {
+      return;
+    }
+    final root = await _gitRootForPath(pane.currentPath);
+    if (root == null) {
+      if (!mounted) return;
+      setState(() {
+        _gitStatusByPath.clear();
+        pane.gitRoot = null;
+      });
+      return;
+    }
+    final statusMap = await _loadGitStatus(root);
+    if (statusMap.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _gitStatusByPath.clear();
+        pane.gitRoot = root;
+      });
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _gitStatusByPath
+        ..clear()
+        ..addAll(statusMap);
+      pane.gitRoot = root;
+    });
+  }
+
+  Future<String?> _gitRootForPath(String path) async {
+    try {
+      final result =
+          await Process.run('git', ['-C', path, 'rev-parse', '--show-toplevel']);
+      if (result.exitCode != 0) {
+        return null;
+      }
+      final root = (result.stdout as String).trim();
+      return root.isEmpty ? null : root;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, String>> _loadGitStatus(String root) async {
+    try {
+      final result = await Process.run(
+        'git',
+        ['-C', root, 'status', '--porcelain'],
+      );
+      if (result.exitCode != 0) {
+        return {};
+      }
+      final map = <String, String>{};
+      final lines = (result.stdout as String).split('\n');
+      for (final line in lines) {
+        if (line.trim().isEmpty || line.length < 3) continue;
+        final status = line.substring(0, 2);
+        var path = line.substring(3).trim();
+        if (path.contains('->')) {
+          path = path.split('->').last.trim();
+        }
+        final code = _gitStatusCode(status);
+        map[_joinPath(root, path)] = code;
+      }
+      return map;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  String _gitStatusCode(String status) {
+    if (status.contains('?')) return '?';
+    if (status.contains('A')) return 'A';
+    if (status.contains('M')) return 'M';
+    if (status.contains('D')) return 'D';
+    return status.trim();
+  }
+
   void _pushHistory(String path) {
     final pane = _activePane;
     if (pane.historyIndex < pane.history.length - 1) {
@@ -514,6 +614,8 @@ class _MainScreenState extends State<MainScreen> {
     }
     pane.history.add(path);
     pane.historyIndex = pane.history.length - 1;
+    _historyVisits[path] = (_historyVisits[path] ?? 0) + 1;
+    _historyLastVisited[path] = DateTime.now();
     _syncActiveTab();
   }
 
@@ -1197,18 +1299,59 @@ class _MainScreenState extends State<MainScreen> {
       if (excludedPrefixes.any((p) => mountPoint.startsWith(p))) {
         continue;
       }
+      final usage = _mountUsage(mountPoint);
       if (removablePrefixes.any((p) => p.isNotEmpty && mountPoint.startsWith(p))) {
         final label = mountPoint.split(Platform.pathSeparator).last;
-        removable.add(_Place(label, mountPoint, AppIcons.usb));
+        removable.add(
+          _Place(
+            label,
+            mountPoint,
+            AppIcons.usb,
+            subtitle: usage?.label,
+            usagePercent: usage?.percent,
+          ),
+        );
         continue;
       }
       if (otherPrefixes.any((p) => mountPoint.startsWith(p))) {
         final label = mountPoint.split(Platform.pathSeparator).last;
-        other.add(_Place(label, mountPoint, AppIcons.drive));
+        other.add(
+          _Place(
+            label,
+            mountPoint,
+            AppIcons.drive,
+            subtitle: usage?.label,
+            usagePercent: usage?.percent,
+          ),
+        );
       }
     }
 
     return _MountGroups(removable: removable, other: other);
+  }
+
+  _MountUsage? _mountUsage(String mountPoint) {
+    try {
+      final result = Process.runSync('df', ['-P', mountPoint]);
+      if (result.exitCode != 0) {
+        return null;
+      }
+      final lines = (result.stdout as String).trim().split('\n');
+      if (lines.length < 2) return null;
+      final parts = lines[1].split(RegExp(r'\s+'));
+      if (parts.length < 6) return null;
+      final total = int.tryParse(parts[1]) ?? 0;
+      final used = int.tryParse(parts[2]) ?? 0;
+      final available = int.tryParse(parts[3]) ?? 0;
+      final percentRaw = parts[4].replaceAll('%', '');
+      final percent = int.tryParse(percentRaw);
+      if (total <= 0) return null;
+      final label =
+          '${_formatBytes(available * 1024)} libres · ${_formatBytes(total * 1024)}';
+      return _MountUsage(label: label, percent: percent ?? 0);
+    } catch (_) {
+      return null;
+    }
   }
 
   List<_Place> _loadCustomPlaces() {
@@ -1774,6 +1917,7 @@ class _MainScreenState extends State<MainScreen> {
           ..clear()
           ..add(newPath);
       });
+      _migrateTagPath(selected.path, newPath);
       _loadFiles();
     } catch (error) {
       if (!mounted) return;
@@ -1781,6 +1925,261 @@ class _MainScreenState extends State<MainScreen> {
         const SnackBar(content: Text('No se pudo renombrar.')),
       );
     }
+  }
+
+  Future<void> _bulkRenameSelected() async {
+    if (_selectedPaths.length < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Selecciona al menos dos elementos para renombrar.'),
+        ),
+      );
+      return;
+    }
+    final config = await _promptBulkRenameConfig();
+    if (config == null) {
+      return;
+    }
+    final selectedItems = _selectedPaths
+        .map((path) => _items.firstWhere((item) => item.path == path))
+        .toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    final padding = selectedItems.length.toString().length;
+    var counter = 1;
+    RegExp? renameRegex;
+    if (config.useRegex && config.find.isNotEmpty) {
+      try {
+        renameRegex = RegExp(config.find);
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Regex inválido.')),
+        );
+        return;
+      }
+    }
+    for (final item in selectedItems) {
+      final dir = item.path.substring(
+        0,
+        item.path.lastIndexOf(Platform.pathSeparator),
+      );
+      final dotIndex = item.name.lastIndexOf('.');
+      final hasExt = dotIndex > 0 && !item.isDirectory;
+      final baseName =
+          hasExt ? item.name.substring(0, dotIndex) : item.name;
+      final ext = hasExt ? item.name.substring(dotIndex) : '';
+      var newName = config.format
+          .replaceAll('{name}', baseName)
+          .replaceAll('{ext}', ext)
+          .replaceAll('{n}', counter.toString().padLeft(padding, '0'));
+      if (!config.format.contains('{ext}') && hasExt) {
+        newName = '$newName$ext';
+      }
+      if (renameRegex != null) {
+        newName = newName.replaceAll(renameRegex, config.replace);
+      }
+      newName = _uniqueNameInDir(dir, newName);
+      try {
+        final newPath = await _fileService.renameEntity(item.path, newName);
+        _migrateTagPath(item.path, newPath);
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo renombrar ${item.name}.')),
+        );
+      }
+      counter++;
+    }
+    _loadFiles();
+  }
+
+  Future<void> _duplicateSelected() async {
+    if (_selectedPaths.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selecciona al menos un elemento.')),
+      );
+      return;
+    }
+    final selectedItems = _selectedPaths
+        .map((path) => _items.firstWhere((item) => item.path == path))
+        .toList();
+    for (final item in selectedItems) {
+      final dir = item.path.substring(
+        0,
+        item.path.lastIndexOf(Platform.pathSeparator),
+      );
+      final dotIndex = item.name.lastIndexOf('.');
+      final hasExt = dotIndex > 0 && !item.isDirectory;
+      final baseName =
+          hasExt ? item.name.substring(0, dotIndex) : item.name;
+      final ext = hasExt ? item.name.substring(dotIndex) : '';
+      final candidate = '$baseName (copia)$ext';
+      final newName = _uniqueNameInDir(dir, candidate);
+      final destPath = _joinPath(dir, newName);
+      try {
+        await _fileService.copyEntity(item.path, destPath);
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo duplicar ${item.name}.')),
+        );
+      }
+    }
+    _loadFiles();
+  }
+
+  String _uniqueNameInDir(String dir, String name) {
+    var candidate = name;
+    var counter = 2;
+    while (FileSystemEntity.typeSync(_joinPath(dir, candidate)) !=
+        FileSystemEntityType.notFound) {
+      final dotIndex = candidate.lastIndexOf('.');
+      final hasExt = dotIndex > 0;
+      final base = hasExt ? candidate.substring(0, dotIndex) : candidate;
+      final ext = hasExt ? candidate.substring(dotIndex) : '';
+      candidate = '$base $counter$ext';
+      counter++;
+    }
+    return candidate;
+  }
+
+  String? _gitStatusForPath(String path) => _gitStatusByPath[path];
+
+  Future<_BulkRenameConfig?> _promptBulkRenameConfig() async {
+    final formatController = TextEditingController(text: '{name}{ext}');
+    final findController = TextEditingController();
+    final replaceController = TextEditingController();
+    final presetNameController = TextEditingController();
+    String? selectedPreset;
+    bool useRegex = false;
+    _BulkRenameConfig? result;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Renombrar en masa'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_renamePresets.isNotEmpty)
+                  DropdownButtonFormField<String>(
+                    value: selectedPreset,
+                    decoration: const InputDecoration(
+                      labelText: 'Preset',
+                    ),
+                    items: _renamePresets
+                        .map(
+                          (preset) => DropdownMenuItem(
+                            value: preset.name,
+                            child: Text(preset.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      final preset = _renamePresets
+                          .firstWhere((p) => p.name == value);
+                      setState(() {
+                        selectedPreset = value;
+                        formatController.text = preset.format;
+                        findController.text = preset.find;
+                        replaceController.text = preset.replace;
+                        useRegex = preset.useRegex;
+                      });
+                    },
+                  ),
+                TextField(
+                  controller: formatController,
+                  decoration: const InputDecoration(
+                    labelText: 'Formato',
+                    hintText: '{name}_{n}{ext}',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Checkbox(
+                      value: useRegex,
+                      onChanged: (value) {
+                        setState(() => useRegex = value ?? false);
+                      },
+                    ),
+                    const Text('Regex buscar/reemplazar'),
+                  ],
+                ),
+                TextField(
+                  controller: findController,
+                  decoration: const InputDecoration(
+                    labelText: 'Buscar (regex)',
+                  ),
+                ),
+                TextField(
+                  controller: replaceController,
+                  decoration: const InputDecoration(
+                    labelText: 'Reemplazar',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: presetNameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Guardar preset como',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancelar'),
+            ),
+            TextButton(
+              onPressed: () {
+                final name = presetNameController.text.trim();
+                if (name.isEmpty) {
+                  return;
+                }
+                final preset = _RenamePreset(
+                  name: name,
+                  format: formatController.text.trim().isEmpty
+                      ? '{name}{ext}'
+                      : formatController.text.trim(),
+                  find: findController.text.trim(),
+                  replace: replaceController.text,
+                  useRegex: useRegex,
+                );
+                setState(() {
+                  _renamePresets.removeWhere((p) => p.name == name);
+                  _renamePresets.add(preset);
+                  selectedPreset = name;
+                });
+                _saveSettings();
+              },
+              child: const Text('Guardar preset'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final format = formatController.text.trim();
+                if (format.isEmpty) {
+                  return;
+                }
+                result = _BulkRenameConfig(
+                  format: format,
+                  find: findController.text.trim(),
+                  replace: replaceController.text,
+                  useRegex: useRegex,
+                );
+                Navigator.of(context).pop();
+              },
+              child: const Text('Aplicar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    return result;
   }
 
   Future<void> _deleteSelected() async {
@@ -1804,6 +2203,7 @@ class _MainScreenState extends State<MainScreen> {
       for (final path in _selectedPaths.toList()) {
         await _fileService.moveToTrash(path);
       }
+      _removeTagsForPaths(_selectedPaths);
       setState(() {
         _selectedPaths.clear();
       });
@@ -1870,6 +2270,7 @@ class _MainScreenState extends State<MainScreen> {
         final destPath = _joinPath(destDir, name);
         await _fileService.moveEntity(path, destPath);
         movedPairs.add(_MovePair(from: path, to: destPath));
+        _migrateTagPath(path, destPath);
       }
       setState(() {
         _selectedPaths.clear();
@@ -1918,7 +2319,11 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  Future<void> _moveItemToFolder(FileItem source, FileItem destination) async {
+  Future<void> _moveItemToFolder(
+    FileItem source,
+    FileItem destination, {
+    bool? copy,
+  }) async {
     if (!destination.isDirectory) {
       return;
     }
@@ -1930,18 +2335,156 @@ class _MainScreenState extends State<MainScreen> {
         destination.path.startsWith('${source.path}${Platform.pathSeparator}')) {
       return;
     }
+    final resolvedCopy = copy ?? _resolveDragDropAction();
+    final doCopy = resolvedCopy ?? await _promptMoveOrCopy();
+    if (doCopy == null) {
+      return;
+    }
     try {
-      await _fileService.moveEntity(source.path, destPath);
+      if (doCopy) {
+        await _fileService.copyEntity(source.path, destPath);
+        final tag = _tagForPath(source.path);
+        if (tag != null) {
+          _tagsByPath[destPath] = tag;
+          _saveSettings();
+        }
+      } else {
+        await _fileService.moveEntity(source.path, destPath);
+        _migrateTagPath(source.path, destPath);
+      }
       setState(() {
         _selectedPaths.clear();
       });
-      _loadFiles();
+      _refreshAfterMove(source.path, destination.path);
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No se pudo mover el elemento.')),
       );
     }
+  }
+
+  Future<void> _moveItemToPath(
+    FileItem source,
+    String destDir, {
+    bool? copy,
+  }) async {
+    final destPath = _joinPath(destDir, source.name);
+    if (destPath == source.path) {
+      return;
+    }
+    if (source.isDirectory &&
+        destDir.startsWith('${source.path}${Platform.pathSeparator}')) {
+      return;
+    }
+    final resolvedCopy = copy ?? _resolveDragDropAction();
+    final doCopy = resolvedCopy ?? await _promptMoveOrCopy();
+    if (doCopy == null) {
+      return;
+    }
+    try {
+      if (doCopy) {
+        await _fileService.copyEntity(source.path, destPath);
+        final tag = _tagForPath(source.path);
+        if (tag != null) {
+          _tagsByPath[destPath] = tag;
+          _saveSettings();
+        }
+      } else {
+        await _fileService.moveEntity(source.path, destPath);
+        _migrateTagPath(source.path, destPath);
+      }
+      setState(() {
+        _selectedPaths.clear();
+      });
+      _refreshAfterMove(source.path, destDir);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo mover el elemento.')),
+      );
+    }
+  }
+
+  void _refreshAfterMove(String sourcePath, String destDir) {
+    _loadFilesForPane(_leftPane);
+    _loadFilesForPane(_rightPane);
+    if (_activePane.currentPath == destDir ||
+        _activePane.currentPath == sourcePath) {
+      _loadFiles();
+    }
+  }
+
+  bool _isCopyModifierPressed() {
+    final keys = HardwareKeyboard.instance.logicalKeysPressed;
+    return keys.contains(LogicalKeyboardKey.controlLeft) ||
+        keys.contains(LogicalKeyboardKey.controlRight);
+  }
+
+  bool? _resolveDragDropAction() {
+    switch (_dragDropDefaultAction) {
+      case 'copy':
+        return true;
+      case 'move':
+        return false;
+      default:
+        return null;
+    }
+  }
+
+  Future<bool?> _promptMoveOrCopy() async {
+    bool rememberChoice = false;
+    String? selection;
+    return showDialog<bool?>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Acción de arrastre'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('¿Qué querés hacer con el archivo?'),
+              const SizedBox(height: 12),
+              CheckboxListTile(
+                value: rememberChoice,
+                onChanged: (value) {
+                  setState(() => rememberChoice = value ?? false);
+                },
+                title: const Text('Recordar mi elección'),
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancelar'),
+            ),
+            TextButton(
+              onPressed: () {
+                selection = 'copy';
+                Navigator.of(context).pop(true);
+              },
+              child: const Text('Copiar'),
+            ),
+            FilledButton(
+              onPressed: () {
+                selection = 'move';
+                Navigator.of(context).pop(false);
+              },
+              child: const Text('Mover'),
+            ),
+          ],
+        ),
+      ),
+    ).then((value) {
+      if (rememberChoice && selection != null) {
+        _dragDropDefaultAction = selection!;
+        _saveSettings();
+      }
+      return value;
+    });
   }
 
   Future<void> _showItemContextMenu(
@@ -2006,6 +2549,27 @@ class _MainScreenState extends State<MainScreen> {
             title: Text('Propiedades'),
           ),
         ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          enabled: false,
+          child: Text('Etiquetas'),
+        ),
+        ..._tagOptions.map(
+          (tag) => PopupMenuItem(
+            value: tag.action,
+            child: ListTile(
+              leading: _TagDot(color: tag.color),
+              title: Text(tag.label),
+            ),
+          ),
+        ),
+        const PopupMenuItem(
+          value: _ItemAction.clearTag,
+          child: ListTile(
+            leading: Icon(AppIcons.close),
+            title: Text('Quitar etiqueta'),
+          ),
+        ),
         if (!item.isDirectory)
           const PopupMenuItem(
             value: _ItemAction.toggleExecutable,
@@ -2043,10 +2607,24 @@ class _MainScreenState extends State<MainScreen> {
           ),
         ),
         const PopupMenuItem(
+          value: _ItemAction.bulkRename,
+          child: ListTile(
+            leading: Icon(AppIcons.edit),
+            title: Text('Renombrar en masa...'),
+          ),
+        ),
+        const PopupMenuItem(
           value: _ItemAction.copy,
           child: ListTile(
             leading: Icon(AppIcons.copy),
             title: Text('Copiar'),
+          ),
+        ),
+        const PopupMenuItem(
+          value: _ItemAction.duplicate,
+          child: ListTile(
+            leading: Icon(AppIcons.copy),
+            title: Text('Duplicar'),
           ),
         ),
         const PopupMenuItem(
@@ -2110,8 +2688,14 @@ class _MainScreenState extends State<MainScreen> {
       case _ItemAction.rename:
         _renameSelected();
         break;
+      case _ItemAction.bulkRename:
+        _bulkRenameSelected();
+        break;
       case _ItemAction.copy:
         _copySelected();
+        break;
+      case _ItemAction.duplicate:
+        _duplicateSelected();
         break;
       case _ItemAction.move:
         _moveSelected();
@@ -2121,6 +2705,33 @@ class _MainScreenState extends State<MainScreen> {
         break;
       case _ItemAction.compress:
         _compressSelected();
+        break;
+      case _ItemAction.tagRed:
+        _applyTagToSelection('red');
+        break;
+      case _ItemAction.tagOrange:
+        _applyTagToSelection('orange');
+        break;
+      case _ItemAction.tagYellow:
+        _applyTagToSelection('yellow');
+        break;
+      case _ItemAction.tagGreen:
+        _applyTagToSelection('green');
+        break;
+      case _ItemAction.tagBlue:
+        _applyTagToSelection('blue');
+        break;
+      case _ItemAction.tagPurple:
+        _applyTagToSelection('purple');
+        break;
+      case _ItemAction.tagPink:
+        _applyTagToSelection('pink');
+        break;
+      case _ItemAction.tagGray:
+        _applyTagToSelection('gray');
+        break;
+      case _ItemAction.clearTag:
+        _applyTagToSelection(null);
         break;
     }
   }
@@ -2297,6 +2908,19 @@ class _MainScreenState extends State<MainScreen> {
   List<FileItem> get _visibleItems => _visibleItemsForPane(_activePane);
 
   List<FileItem> _visibleItemsForPane(_PaneData pane) {
+    final query = pane.searchQuery;
+    if (_isGlobalSearchActive(query)) {
+      if (_globalSearchLoading || _globalSearchError != null) {
+        return [];
+      }
+      final results = _filterByQuery(
+        query,
+        allItems: _globalSearchItems,
+        searchIndex: _globalSearchIndex,
+        gitStatusForPath: _gitStatusForPath,
+      );
+      return _sortItems(results);
+    }
     final filtered = _showHidden
         ? pane.items
         : pane.items.where((item) => !item.name.startsWith('.')).toList();
@@ -2307,8 +2931,359 @@ class _MainScreenState extends State<MainScreen> {
             baseItems: filtered,
             searchIndex: pane.searchIndex,
             allItems: pane.items,
+            gitStatusForPath: _gitStatusForPath,
           );
     return _sortItems(base);
+  }
+
+  bool _isGlobalSearchActive(String query) {
+    return _globalSearchEnabled && query.trim().isNotEmpty;
+  }
+
+  Future<void> _ensureGlobalSearchIndex({bool force = false}) async {
+    if (_globalSearchLoading) {
+      return;
+    }
+    if (!force && _globalSearchItems.isNotEmpty) {
+      return;
+    }
+    setState(() {
+      _globalSearchLoading = true;
+      _globalSearchError = null;
+    });
+    try {
+      if (!force) {
+        final cached = _loadGlobalSearchCache();
+        if (cached != null) {
+          setState(() {
+            _globalSearchItems = cached;
+            _globalSearchIndex = _buildSearchIndex(cached);
+            _globalSearchLoading = false;
+          });
+          return;
+        }
+      }
+      final items = await _scanGlobalItems(_globalSearchRoots);
+      _globalSearchBuiltAt = DateTime.now();
+      _saveGlobalSearchCache(items);
+      setState(() {
+        _globalSearchItems = items;
+        _globalSearchIndex = _buildSearchIndex(items);
+        _globalSearchLoading = false;
+      });
+    } catch (error) {
+      setState(() {
+        _globalSearchLoading = false;
+        _globalSearchError = 'No se pudo indexar las rutas globales.';
+      });
+    }
+  }
+
+  Future<List<FileItem>> _scanGlobalItems(List<String> roots) async {
+    final items = <FileItem>[];
+    for (final root in roots) {
+      final rootDir = Directory(root);
+      if (!rootDir.existsSync()) {
+        continue;
+      }
+      await for (final entity
+          in rootDir.list(recursive: true, followLinks: false)) {
+        final path = entity.path;
+        final name = path.split(Platform.pathSeparator).last;
+        if (!_showHidden) {
+          if (name.startsWith('.')) {
+            continue;
+          }
+          final segments = path.split(Platform.pathSeparator);
+          if (segments.any((segment) => segment.startsWith('.'))) {
+            continue;
+          }
+        }
+        try {
+          final stat = await FileStat.stat(path);
+          final isDir = entity is Directory;
+          items.add(
+            FileItem(
+              path: path,
+              name: name,
+              isDirectory: isDir,
+              sizeBytes: isDir ? 0 : stat.size,
+              modifiedAt: stat.modified,
+            ),
+          );
+        } catch (_) {
+          continue;
+        }
+      }
+    }
+    return items;
+  }
+
+  void _toggleGlobalSearch() {
+    setState(() {
+      _globalSearchEnabled = !_globalSearchEnabled;
+    });
+    _saveSettings();
+    if (_globalSearchEnabled && _searchQuery.trim().isNotEmpty) {
+      _ensureGlobalSearchIndex();
+    }
+  }
+
+  void _reindexGlobalSearch() {
+    _ensureGlobalSearchIndex(force: true);
+  }
+
+  void _toggleThemeMode() {
+    final current = themeController.mode;
+    final next =
+        current == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
+    themeController.setMode(next);
+  }
+
+  void _cycleDragDropAction() {
+    setState(() {
+      if (_dragDropDefaultAction == 'ask') {
+        _dragDropDefaultAction = 'copy';
+      } else if (_dragDropDefaultAction == 'copy') {
+        _dragDropDefaultAction = 'move';
+      } else {
+        _dragDropDefaultAction = 'ask';
+      }
+    });
+    _saveSettings();
+  }
+
+  void _toggleGlobalRoot(String root, bool enabled) {
+    final roots = List<String>.from(_globalSearchRoots);
+    if (enabled) {
+      if (!roots.contains(root)) {
+        roots.add(root);
+      }
+    } else {
+      roots.remove(root);
+    }
+    if (roots.isEmpty) {
+      roots.add(_homePath);
+    }
+    setState(() {
+      _globalSearchRoots = roots;
+    });
+    _saveSettings();
+    if (_globalSearchEnabled) {
+      _reindexGlobalSearch();
+    }
+  }
+
+  Future<void> _promptAddGlobalRoot() async {
+    final controller = TextEditingController();
+    String? result;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Agregar ruta global'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: '/home/usuario/Proyectos',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              result = controller.text.trim();
+              Navigator.pop(context);
+            },
+            child: const Text('Agregar'),
+          ),
+        ],
+      ),
+    );
+    if (result == null || result!.isEmpty) {
+      return;
+    }
+    final path = result!;
+    final dir = Directory(path);
+    if (!dir.existsSync()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('La ruta no existe: $path')),
+      );
+      return;
+    }
+    _toggleGlobalRoot(path, true);
+  }
+
+  void _toggleHidden() {
+    setState(() {
+      _showHidden = !_showHidden;
+    });
+    _saveSettings();
+    if (_globalSearchEnabled) {
+      _reindexGlobalSearch();
+    }
+  }
+
+  void _clearHistoryPanel() {
+    setState(() {
+      _historyVisits.clear();
+      _historyLastVisited.clear();
+      _history
+        ..clear()
+        ..add(_currentPath);
+      _historyIndex = 0;
+    });
+    _saveSettings();
+  }
+
+  String? _tagForPath(String path) => _tagsByPath[path];
+
+  Color? _tagColorForPath(String path) {
+    final id = _tagForPath(path);
+    if (id == null) return null;
+    return _tagOptions.firstWhere((tag) => tag.id == id,
+            orElse: () => _tagOptions.first)
+        .color;
+  }
+
+  String? _tagLabelForPath(String path) {
+    final id = _tagForPath(path);
+    if (id == null) return null;
+    return _tagOptions.firstWhere((tag) => tag.id == id,
+            orElse: () => _tagOptions.first)
+        .label;
+  }
+
+  void _applyTagToSelection(String? tagId) {
+    if (_selectedPaths.isEmpty) {
+      return;
+    }
+    setState(() {
+      if (tagId == null) {
+        for (final path in _selectedPaths) {
+          _tagsByPath.remove(path);
+        }
+      } else {
+        for (final path in _selectedPaths) {
+          _tagsByPath[path] = tagId;
+        }
+      }
+    });
+    _saveSettings();
+  }
+
+  void _migrateTagPath(String from, String to) {
+    final tag = _tagsByPath.remove(from);
+    if (tag != null) {
+      _tagsByPath[to] = tag;
+      _saveSettings();
+    }
+  }
+
+  void _removeTagsForPaths(Iterable<String> paths) {
+    var changed = false;
+    for (final path in paths) {
+      if (_tagsByPath.remove(path) != null) {
+        changed = true;
+      }
+    }
+    if (changed) {
+      _saveSettings();
+    }
+  }
+
+  String _globalSearchCachePath() {
+    return _joinPath(_placesConfigDir(), 'global_search.json');
+  }
+
+  List<FileItem>? _loadGlobalSearchCache() {
+    final file = File(_globalSearchCachePath());
+    if (!file.existsSync()) {
+      return null;
+    }
+    try {
+      final data = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+      final roots = (data['roots'] as List?)?.whereType<String>().toList() ?? [];
+      final hidden = data['showHidden'] as bool? ?? false;
+      if (hidden != _showHidden) {
+        return null;
+      }
+      if (!_sameRoots(roots, _globalSearchRoots)) {
+        return null;
+      }
+      final builtAtRaw = data['builtAt'] as String?;
+      _globalSearchBuiltAt =
+          builtAtRaw != null ? DateTime.tryParse(builtAtRaw) : null;
+      final items = <FileItem>[];
+      final rawItems = data['items'];
+      if (rawItems is! List) {
+        return null;
+      }
+      for (final raw in rawItems) {
+        if (raw is! Map) continue;
+        final map = Map<String, dynamic>.from(raw);
+        final path = map['path'] as String?;
+        final name = map['name'] as String?;
+        final isDir = map['isDirectory'] as bool? ?? false;
+        final size = map['sizeBytes'] as int? ?? 0;
+        final modifiedRaw = map['modifiedAt'] as String?;
+        if (path == null || name == null || modifiedRaw == null) {
+          continue;
+        }
+        final modified = DateTime.tryParse(modifiedRaw);
+        if (modified == null) continue;
+        items.add(
+          FileItem(
+            path: path,
+            name: name,
+            isDirectory: isDir,
+            sizeBytes: size,
+            modifiedAt: modified,
+          ),
+        );
+      }
+      return items;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _saveGlobalSearchCache(List<FileItem> items) {
+    final dir = Directory(_placesConfigDir());
+    if (!dir.existsSync()) {
+      dir.createSync(recursive: true);
+    }
+    final file = File(_globalSearchCachePath());
+    final data = <String, dynamic>{
+      'roots': _globalSearchRoots,
+      'showHidden': _showHidden,
+      'builtAt': _globalSearchBuiltAt?.toIso8601String(),
+      'items': items
+          .map(
+            (item) => {
+              'path': item.path,
+              'name': item.name,
+              'isDirectory': item.isDirectory,
+              'sizeBytes': item.sizeBytes,
+              'modifiedAt': item.modifiedAt.toIso8601String(),
+            },
+          )
+          .toList(),
+    };
+    file.writeAsStringSync(jsonEncode(data));
+  }
+
+  bool _sameRoots(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    final aSorted = List<String>.from(a)..sort();
+    final bSorted = List<String>.from(b)..sort();
+    for (var i = 0; i < aSorted.length; i++) {
+      if (aSorted[i] != bSorted[i]) return false;
+    }
+    return true;
   }
 
   Map<String, List<FileItem>> _buildSearchIndex(List<FileItem> items) {
@@ -2329,6 +3304,7 @@ class _MainScreenState extends State<MainScreen> {
     List<FileItem>? baseItems,
     Map<String, List<FileItem>>? searchIndex,
     List<FileItem>? allItems,
+    String? Function(String path)? gitStatusForPath,
   }) {
     final normalized = query.toLowerCase().trim();
     if (normalized.isEmpty) {
@@ -2341,6 +3317,12 @@ class _MainScreenState extends State<MainScreen> {
     final index = searchIndex ?? _searchIndex;
     final candidates = baseItems ?? (index[key] ?? (allItems ?? _items));
     return candidates.where((item) {
+      if (parsed.gitStatus != null) {
+        final status = gitStatusForPath?.call(item.path);
+        if (status == null || status != parsed.gitStatus) {
+          return false;
+        }
+      }
       if (parsed.type != null) {
         final t = parsed.type!;
         if (t == 'dir' || t == 'carpeta') {
@@ -2431,6 +3413,12 @@ class _MainScreenState extends State<MainScreen> {
       );
       _showDetailsPanel = data['showDetails'] as bool? ?? true;
       _showHidden = data['showHidden'] as bool? ?? false;
+      _globalSearchEnabled = data['globalSearchEnabled'] as bool? ?? false;
+      final roots = (data['globalSearchRoots'] as List?)
+              ?.whereType<String>()
+              .toList() ??
+          [_homePath];
+      _globalSearchRoots = roots.isEmpty ? [_homePath] : roots;
       _previewSize = (data['previewSize'] as num?)?.toDouble() ?? _previewSize;
       final sort = data['sortField'] as String?;
       _sortField = _SortField.values.firstWhere(
@@ -2442,6 +3430,51 @@ class _MainScreenState extends State<MainScreen> {
           (data['recentItems'] as List?)?.whereType<String>().toList() ?? [];
       _favoriteItems =
           (data['favoriteItems'] as List?)?.whereType<String>().toList() ?? [];
+      final tagMap = data['tags'];
+      if (tagMap is Map) {
+        _tagsByPath
+          ..clear()
+          ..addAll(
+            Map<String, dynamic>.from(tagMap).map(
+              (key, value) => MapEntry(key, value.toString()),
+            ),
+          );
+      }
+      _dragDropDefaultAction =
+          data['dragDropDefaultAction'] as String? ?? 'ask';
+      final presets = data['renamePresets'];
+      if (presets is List) {
+        _renamePresets
+          ..clear()
+          ..addAll(
+            presets
+                .whereType<Map>()
+                .map((entry) => _RenamePreset.fromMap(
+                      Map<String, dynamic>.from(entry),
+                    )),
+          );
+      }
+      final historyMap = data['historyStats'];
+      if (historyMap is Map) {
+        _historyVisits.clear();
+        _historyLastVisited.clear();
+        for (final entry in historyMap.entries) {
+          final key = entry.key.toString();
+          final value = entry.value;
+          if (value is Map) {
+            final map = Map<String, dynamic>.from(value);
+            final count = map['count'] as int? ?? 0;
+            final lastRaw = map['lastVisited'] as String?;
+            final last = lastRaw != null ? DateTime.tryParse(lastRaw) : null;
+            if (count > 0) {
+              _historyVisits[key] = count;
+            }
+            if (last != null) {
+              _historyLastVisited[key] = last;
+            }
+          }
+        }
+      }
       final tabsData = data['tabs'];
       if (tabsData is List) {
         _tabs.clear();
@@ -2504,11 +3537,25 @@ class _MainScreenState extends State<MainScreen> {
       'viewMode': _viewMode.name,
       'showDetails': _showDetailsPanel,
       'showHidden': _showHidden,
+      'globalSearchEnabled': _globalSearchEnabled,
+      'globalSearchRoots': _globalSearchRoots,
       'previewSize': _previewSize,
       'sortField': _sortField.name,
       'sortAscending': _sortAscending,
       'recentItems': _recentItems,
       'favoriteItems': _favoriteItems,
+      'tags': _tagsByPath,
+      'renamePresets': _renamePresets.map((p) => p.toMap()).toList(),
+      'historyStats': _historyVisits.map(
+        (key, value) => MapEntry(
+          key,
+          {
+            'count': value,
+            'lastVisited': _historyLastVisited[key]?.toIso8601String(),
+          },
+        ),
+      ),
+      'dragDropDefaultAction': _dragDropDefaultAction,
       'tabs': tabsData,
       'activeTabIndex': _activeTabIndex,
     };
@@ -2548,6 +3595,7 @@ class _MainScreenState extends State<MainScreen> {
   Widget _buildPane(_PaneData pane, bool isRight) {
     final visibleItems = _visibleItemsForPane(pane);
     final isActive = _activePane == pane;
+    final isGlobalSearch = _isGlobalSearchActive(pane.searchQuery);
     return GestureDetector(
       onTapDown: (_) => _activatePane(isRight),
       onSecondaryTapDown: (details) =>
@@ -2576,76 +3624,112 @@ class _MainScreenState extends State<MainScreen> {
                   _finishPathEditForPane(pane, navigate: navigate),
             ),
             Expanded(
-              child: pane.errorMessage != null
-                  ? _EmptyState(message: pane.errorMessage!)
-                  : visibleItems.isEmpty
-                      ? const _EmptyState(message: 'No hay elementos aquí.')
-                      : _viewMode == _ViewMode.grid
-                          ? _GridView(
-                              items: visibleItems,
-                              selectedPaths: pane.selectedPaths,
-                              onSelect: (item, index, items) =>
-                                  _selectItemForPane(
-                                      item, index, items, isRight),
-                              onOpen: (item) =>
-                                  _openItemForPane(item, isRight),
-                              onContextMenu: (item, pos) =>
-                                  _showItemContextMenuForPane(
-                                      item, pos, isRight),
-                              onDropOnFolder: (source, target) =>
-                                  _moveItemToFolder(source, target),
-                              isCut: (path) =>
-                                  _memoryClipboardIsCut &&
-                                  _memoryClipboardPaths.contains(path),
-                            )
-                          : _viewMode == _ViewMode.columns
-                              ? _ColumnsView(
-                                  fileService: _fileService,
-                                  currentPath: pane.currentPath,
-                                  items: visibleItems,
-                                  selectedPaths: pane.selectedPaths,
-                                  onSelect: (item, index, items) =>
-                                      _selectItemForPane(
-                                          item, index, items, isRight),
-                                  onOpen: (item) =>
-                                      _openItemForPane(item, isRight),
-                                  onNavigate: (path) =>
-                                      _navigateToPane(path, pane),
-                                  onContextMenu: (item, pos) =>
-                                      _showItemContextMenuForPane(
-                                          item, pos, isRight),
-                                  onDropOnFolder: (source, target) =>
-                                      _moveItemToFolder(source, target),
-                                  isCut: (path) =>
-                                      _memoryClipboardIsCut &&
-                                      _memoryClipboardPaths.contains(path),
-                                )
-                              : _ListView(
-                                  items: visibleItems,
-                                  selectedPaths: pane.selectedPaths,
-                                  onSelect: (item, index, items) =>
-                                      _selectItemForPane(
-                                          item, index, items, isRight),
-                                  onOpen: (item) =>
-                                      _openItemForPane(item, isRight),
-                                  onContextMenu: (item, pos) =>
-                                      _showItemContextMenuForPane(
-                                          item, pos, isRight),
-                                  onDropOnFolder: (source, target) =>
-                                      _moveItemToFolder(source, target),
-                                  formatBytes: _formatBytes,
-                                  formatDate: _formatDate,
-                                  sortField: _sortField,
-                                  sortAscending: _sortAscending,
-                                  onSort: _toggleSort,
-                                  isCut: (path) =>
-                                      _memoryClipboardIsCut &&
-                                      _memoryClipboardPaths.contains(path),
-                                ),
+              child: DragTarget<FileItem>(
+                onWillAcceptWithDetails: (details) =>
+                    details.data.path != pane.currentPath,
+                onAcceptWithDetails: (details) => _moveItemToPath(
+                  details.data,
+                  pane.currentPath,
+                ),
+                builder: (context, candidateData, rejectedData) => isGlobalSearch
+                    ? _buildGlobalSearchPane(visibleItems, pane, isRight)
+                    : pane.errorMessage != null
+                        ? _EmptyState(message: pane.errorMessage!)
+                        : visibleItems.isEmpty
+                            ? const _EmptyState(message: 'No hay elementos aquí.')
+                            : _buildItemsView(visibleItems, pane, isRight),
+              ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildGlobalSearchPane(
+    List<FileItem> visibleItems,
+    _PaneData pane,
+    bool isRight,
+  ) {
+    if (_globalSearchLoading) {
+      return const _EmptyState(message: 'Indexando /home...');
+    }
+    if (_globalSearchError != null) {
+      return _EmptyState(message: _globalSearchError!);
+    }
+    if (visibleItems.isEmpty) {
+      return const _EmptyState(message: 'No hay resultados.');
+    }
+    return _buildItemsView(visibleItems, pane, isRight);
+  }
+
+  Widget _buildItemsView(
+    List<FileItem> visibleItems,
+    _PaneData pane,
+    bool isRight,
+  ) {
+    if (_viewMode == _ViewMode.grid) {
+      return _GridView(
+        items: visibleItems,
+        selectedPaths: pane.selectedPaths,
+        onSelect: (item, index, items) =>
+            _selectItemForPane(item, index, items, isRight),
+        onOpen: (item) => _openItemForPane(item, isRight),
+        onContextMenu: (item, pos) =>
+            _showItemContextMenuForPane(item, pos, isRight),
+        onDropOnFolder: (source, target) => _moveItemToFolder(
+          source,
+          target,
+        ),
+        isCut: (path) =>
+            _memoryClipboardIsCut && _memoryClipboardPaths.contains(path),
+        tagColorForPath: _tagColorForPath,
+        gitStatusForPath: _gitStatusForPath,
+      );
+    }
+    if (_viewMode == _ViewMode.columns) {
+      return _ColumnsView(
+        fileService: _fileService,
+        currentPath: pane.currentPath,
+        items: visibleItems,
+        selectedPaths: pane.selectedPaths,
+        onSelect: (item, index, items) =>
+            _selectItemForPane(item, index, items, isRight),
+        onOpen: (item) => _openItemForPane(item, isRight),
+        onNavigate: (path) => _navigateToPane(path, pane),
+        onContextMenu: (item, pos) =>
+            _showItemContextMenuForPane(item, pos, isRight),
+        onDropOnFolder: (source, target) => _moveItemToFolder(
+          source,
+          target,
+        ),
+        isCut: (path) =>
+            _memoryClipboardIsCut && _memoryClipboardPaths.contains(path),
+        tagColorForPath: _tagColorForPath,
+        gitStatusForPath: _gitStatusForPath,
+      );
+    }
+    return _ListView(
+      items: visibleItems,
+      selectedPaths: pane.selectedPaths,
+      onSelect: (item, index, items) =>
+          _selectItemForPane(item, index, items, isRight),
+      onOpen: (item) => _openItemForPane(item, isRight),
+      onContextMenu: (item, pos) =>
+          _showItemContextMenuForPane(item, pos, isRight),
+      onDropOnFolder: (source, target) => _moveItemToFolder(
+        source,
+        target,
+      ),
+      formatBytes: _formatBytes,
+      formatDate: _formatDate,
+      sortField: _sortField,
+      sortAscending: _sortAscending,
+      onSort: _toggleSort,
+      isCut: (path) =>
+          _memoryClipboardIsCut && _memoryClipboardPaths.contains(path),
+      tagColorForPath: _tagColorForPath,
+      gitStatusForPath: _gitStatusForPath,
     );
   }
 
@@ -2692,9 +3776,7 @@ class _MainScreenState extends State<MainScreen> {
             return null;
           }),
           _ToggleHiddenIntent: CallbackAction(onInvoke: (_) {
-            setState(() {
-              _showHidden = !_showHidden;
-            });
+            _toggleHidden();
             return null;
           }),
           _UndoIntent: CallbackAction(onInvoke: (_) => _undoLastAction()),
@@ -2725,6 +3807,17 @@ class _MainScreenState extends State<MainScreen> {
                         isGrid: _viewMode == _ViewMode.grid,
                         showDetails: _showDetailsPanel,
                         showHidden: _showHidden,
+                        globalSearchEnabled: _globalSearchEnabled,
+                        globalSearchLoading: _globalSearchLoading,
+                        homePath: _homePath,
+                        globalSearchRoots: _globalSearchRoots,
+                        themeMode: themeController.mode,
+                        dragDropDefaultAction: _dragDropDefaultAction,
+                        onDragDropActionChanged: (value) {
+                          if (value == null) return;
+                          setState(() => _dragDropDefaultAction = value);
+                          _saveSettings();
+                        },
                         onNewFolder: _createFolder,
                         onUndo: _undoLastAction,
                         onRename: _renameSelected,
@@ -2741,9 +3834,7 @@ class _MainScreenState extends State<MainScreen> {
                         onToggleDetails: () => setState(
                           () => _showDetailsPanel = !_showDetailsPanel,
                         ),
-                        onToggleHidden: () => setState(
-                          () => _showHidden = !_showHidden,
-                        ),
+                        onToggleHidden: _toggleHidden,
                         onSetViewList: () => _setViewMode(_ViewMode.list),
                         onSetViewGrid: () => _setViewMode(_ViewMode.grid),
                         onSetViewColumns: () => _setViewMode(_ViewMode.columns),
@@ -2752,6 +3843,11 @@ class _MainScreenState extends State<MainScreen> {
                         onSortByModified: () => _toggleSort(_SortField.modified),
                         onIncreaseThumbs: () => _changePreviewSize(20),
                         onDecreaseThumbs: () => _changePreviewSize(-20),
+                        onToggleGlobalSearch: _toggleGlobalSearch,
+                        onReindexGlobalSearch: _reindexGlobalSearch,
+                        onToggleGlobalRoot: _toggleGlobalRoot,
+                        onAddGlobalRoot: _promptAddGlobalRoot,
+                        onToggleTheme: _toggleThemeMode,
                         onRefreshRemotes: _loadRcloneRemotes,
                         onMountAll: () {
                           for (final remote in _cloudRemotes) {
@@ -2798,7 +3894,7 @@ class _MainScreenState extends State<MainScreen> {
                         onForward: _goForward,
                         onUp: _goUp,
                         onRefresh: _loadFiles,
-                        onToggleView: () {
+        onToggleView: () {
                           if (_viewMode == _ViewMode.list) {
                             _setViewMode(_ViewMode.grid);
                           } else if (_viewMode == _ViewMode.grid) {
@@ -2817,9 +3913,18 @@ class _MainScreenState extends State<MainScreen> {
                             _searchQuery = value;
                           });
                           _syncActiveTab();
+                          if (_isGlobalSearchActive(value)) {
+                            _ensureGlobalSearchIndex();
+                          }
                         },
                         searchController: _searchController,
                         searchFocusNode: _searchFocusNode,
+                        globalSearchEnabled: _globalSearchEnabled,
+                        globalSearchLoading: _globalSearchLoading,
+                        onToggleGlobalSearch: _toggleGlobalSearch,
+                        onReindexGlobalSearch: _reindexGlobalSearch,
+                        dragDropDefaultAction: _dragDropDefaultAction,
+                        onCycleDragDropAction: _cycleDragDropAction,
                       ),
                       Expanded(
                         child: _dualPane
@@ -2862,6 +3967,10 @@ class _MainScreenState extends State<MainScreen> {
                         totalCount: _items.length,
                         currentPath: _currentPath,
                         selectedCount: _selectedCount,
+                        globalSearchEnabled: _globalSearchEnabled,
+                        globalSearchBuiltAt: _globalSearchBuiltAt,
+                        gitRoot: _activePane.gitRoot,
+                        dragDropDefaultAction: _dragDropDefaultAction,
                       ),
                     ],
                   ),
@@ -2890,6 +3999,13 @@ class _MainScreenState extends State<MainScreen> {
                     onZoomIn: () => _changePreviewSize(20),
                     onZoomOut: () => _changePreviewSize(-20),
                     selectedCount: _selectedCount,
+                    tagLabelForPath: _tagLabelForPath,
+                    tagColorForPath: _tagColorForPath,
+                    history: _history,
+                    historyVisits: _historyVisits,
+                    historyLastVisited: _historyLastVisited,
+                    onNavigate: _navigateTo,
+                    onClearHistory: _clearHistoryPanel,
                   )
                 : const SizedBox.shrink(
                     key: ValueKey('details-hidden'),
@@ -3521,6 +4637,27 @@ class _Sidebar extends StatelessWidget {
                         dense: true,
                         leading: Icon(place.icon),
                         title: Text(place.label),
+                        subtitle: place.subtitle != null
+                            ? Text(
+                                place.subtitle!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              )
+                            : null,
+                        trailing: place.usagePercent != null
+                            ? Text(
+                                '${place.usagePercent}%',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelSmall
+                                    ?.copyWith(
+                                      color: _usageColor(
+                                        context,
+                                        place.usagePercent!,
+                                      ),
+                                    ),
+                              )
+                            : null,
                         selected: isSelected,
                         selectedTileColor: Theme.of(context)
                             .colorScheme
@@ -3544,6 +4681,16 @@ class _Sidebar extends StatelessWidget {
       ),
     );
   }
+
+  Color _usageColor(BuildContext context, int percent) {
+    if (percent >= 90) {
+      return Theme.of(context).colorScheme.error;
+    }
+    if (percent >= 75) {
+      return Colors.orangeAccent;
+    }
+    return Theme.of(context).colorScheme.primary;
+  }
 }
 
 enum _PlaceAction {
@@ -3555,6 +4702,11 @@ class _AppMenuBar extends StatelessWidget {
   final bool isGrid;
   final bool showDetails;
   final bool showHidden;
+  final bool globalSearchEnabled;
+  final bool globalSearchLoading;
+  final String homePath;
+  final List<String> globalSearchRoots;
+  final ThemeMode themeMode;
   final VoidCallback onNewFolder;
   final VoidCallback onUndo;
   final VoidCallback onRename;
@@ -3572,6 +4724,13 @@ class _AppMenuBar extends StatelessWidget {
   final VoidCallback onSortByModified;
   final VoidCallback onIncreaseThumbs;
   final VoidCallback onDecreaseThumbs;
+  final VoidCallback onToggleGlobalSearch;
+  final VoidCallback onReindexGlobalSearch;
+  final void Function(String root, bool enabled) onToggleGlobalRoot;
+  final VoidCallback onAddGlobalRoot;
+  final VoidCallback onToggleTheme;
+  final String dragDropDefaultAction;
+  final ValueChanged<String> onDragDropActionChanged;
   final VoidCallback onRefreshRemotes;
   final VoidCallback onMountAll;
   final VoidCallback onUnmountAll;
@@ -3584,6 +4743,11 @@ class _AppMenuBar extends StatelessWidget {
     required this.isGrid,
     required this.showDetails,
     required this.showHidden,
+    required this.globalSearchEnabled,
+    required this.globalSearchLoading,
+    required this.homePath,
+    required this.globalSearchRoots,
+    required this.themeMode,
     required this.onNewFolder,
     required this.onUndo,
     required this.onRename,
@@ -3601,6 +4765,13 @@ class _AppMenuBar extends StatelessWidget {
     required this.onSortByModified,
     required this.onIncreaseThumbs,
     required this.onDecreaseThumbs,
+    required this.onToggleGlobalSearch,
+    required this.onReindexGlobalSearch,
+    required this.onToggleGlobalRoot,
+    required this.onAddGlobalRoot,
+    required this.onToggleTheme,
+    required this.dragDropDefaultAction,
+    required this.onDragDropActionChanged,
     required this.onRefreshRemotes,
     required this.onMountAll,
     required this.onUnmountAll,
@@ -3679,6 +4850,85 @@ class _AppMenuBar extends StatelessWidget {
                       value: showHidden,
                       onChanged: (_) => onToggleHidden(),
                       child: const Text('Mostrar ocultos'),
+                    ),
+                    CheckboxMenuButton(
+                      value: themeMode == ThemeMode.light,
+                      onChanged: (_) => onToggleTheme(),
+                      child: const Text('Tema claro'),
+                    ),
+                    CheckboxMenuButton(
+                      value: globalSearchEnabled,
+                      onChanged: (_) => onToggleGlobalSearch(),
+                      child: const Text('Búsqueda global en /home'),
+                    ),
+                    SubmenuButton(
+                      child: const Text('Arrastrar y soltar'),
+                      menuChildren: [
+                        RadioMenuButton<String>(
+                          value: 'ask',
+                          groupValue: dragDropDefaultAction,
+                          onChanged: (value) {
+                            if (value != null) {
+                              onDragDropActionChanged(value);
+                            }
+                          },
+                          child: const Text('Preguntar'),
+                        ),
+                        RadioMenuButton<String>(
+                          value: 'copy',
+                          groupValue: dragDropDefaultAction,
+                          onChanged: (value) {
+                            if (value != null) {
+                              onDragDropActionChanged(value);
+                            }
+                          },
+                          child: const Text('Copiar'),
+                        ),
+                        RadioMenuButton<String>(
+                          value: 'move',
+                          groupValue: dragDropDefaultAction,
+                          onChanged: (value) {
+                            if (value != null) {
+                              onDragDropActionChanged(value);
+                            }
+                          },
+                          child: const Text('Mover'),
+                        ),
+                      ],
+                    ),
+                    MenuItemButton(
+                      onPressed:
+                          globalSearchLoading ? null : onReindexGlobalSearch,
+                      child: const Text('Reindexar búsqueda global'),
+                    ),
+                    MenuItemButton(
+                      onPressed: onAddGlobalRoot,
+                      child: const Text('Agregar ruta global...'),
+                    ),
+                    const Divider(height: 12),
+                    CheckboxMenuButton(
+                      value: globalSearchRoots.contains(homePath),
+                      onChanged: (value) =>
+                          onToggleGlobalRoot(homePath, value ?? false),
+                      child: const Text('Incluir Home'),
+                    ),
+                    CheckboxMenuButton(
+                      value: globalSearchRoots.contains('/mnt'),
+                      onChanged: (value) =>
+                          onToggleGlobalRoot('/mnt', value ?? false),
+                      child: const Text('Incluir /mnt'),
+                    ),
+                    CheckboxMenuButton(
+                      value: globalSearchRoots.contains('/media'),
+                      onChanged: (value) =>
+                          onToggleGlobalRoot('/media', value ?? false),
+                      child: const Text('Incluir /media'),
+                    ),
+                    CheckboxMenuButton(
+                      value: globalSearchRoots.contains('/run/media'),
+                      onChanged: (value) =>
+                          onToggleGlobalRoot('/run/media', value ?? false),
+                      child: const Text('Incluir /run/media'),
                     ),
                     const MenuItemButton(
                       onPressed: null,
@@ -3773,6 +5023,16 @@ class _MountGroups {
   const _MountGroups({
     required this.removable,
     required this.other,
+  });
+}
+
+class _MountUsage {
+  final String label;
+  final int percent;
+
+  const _MountUsage({
+    required this.label,
+    required this.percent,
   });
 }
 
@@ -4010,6 +5270,12 @@ class _Toolbar extends StatelessWidget {
   final ValueChanged<String> onSearchChanged;
   final TextEditingController searchController;
   final FocusNode searchFocusNode;
+  final bool globalSearchEnabled;
+  final bool globalSearchLoading;
+  final VoidCallback onToggleGlobalSearch;
+  final VoidCallback onReindexGlobalSearch;
+  final String dragDropDefaultAction;
+  final VoidCallback onCycleDragDropAction;
 
   const _Toolbar({
     required this.canGoBack,
@@ -4028,6 +5294,12 @@ class _Toolbar extends StatelessWidget {
     required this.onSearchChanged,
     required this.searchController,
     required this.searchFocusNode,
+    required this.globalSearchEnabled,
+    required this.globalSearchLoading,
+    required this.onToggleGlobalSearch,
+    required this.onReindexGlobalSearch,
+    required this.dragDropDefaultAction,
+    required this.onCycleDragDropAction,
   });
 
   @override
@@ -4083,18 +5355,75 @@ class _Toolbar extends StatelessWidget {
               focusNode: searchFocusNode,
               controller: searchController,
               decoration: InputDecoration(
-                hintText: 'Buscar en esta carpeta',
+                hintText:
+                    globalSearchEnabled ? 'Buscar en /home' : 'Buscar en esta carpeta',
                 prefixIcon: const Icon(AppIcons.search),
                 isDense: true,
               ),
             ),
           ),
           const SizedBox(width: 12),
+          Container(
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Theme.of(context).dividerColor),
+            ),
+            child: Row(
+              children: [
+                IconButton(
+                  tooltip: globalSearchEnabled
+                      ? 'Búsqueda global activada'
+                      : 'Buscar en /home',
+                  onPressed: onToggleGlobalSearch,
+                  icon: Icon(
+                    AppIcons.globe,
+                    color: globalSearchEnabled
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Reindexar búsqueda global',
+                  onPressed: globalSearchLoading ? null : onReindexGlobalSearch,
+                  icon: globalSearchLoading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(AppIcons.refresh),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
           FittedBox(
             fit: BoxFit.scaleDown,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Theme.of(context).dividerColor),
+                  ),
+                  child: IconButton(
+                    tooltip: 'Arrastrar: ${_dragDropLabel(dragDropDefaultAction)}',
+                    onPressed: onCycleDragDropAction,
+                    icon: Icon(
+                      dragDropDefaultAction == 'copy'
+                          ? AppIcons.copy
+                          : dragDropDefaultAction == 'move'
+                              ? AppIcons.move
+                              : AppIcons.help,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
                 Container(
                   padding: const EdgeInsets.all(2),
                   decoration: BoxDecoration(
@@ -4197,10 +5526,21 @@ enum _ItemAction {
   cutMemory,
   copyRoot,
   rename,
+  bulkRename,
   delete,
   copy,
+  duplicate,
   move,
   compress,
+  tagRed,
+  tagOrange,
+  tagYellow,
+  tagGreen,
+  tagBlue,
+  tagPurple,
+  tagPink,
+  tagGray,
+  clearTag,
 }
 
 enum _BackgroundAction {
@@ -4216,6 +5556,71 @@ enum _BackgroundAction {
   goRoot,
   goRootUser,
 }
+
+class _TagOption {
+  final String id;
+  final String label;
+  final Color color;
+  final _ItemAction action;
+
+  const _TagOption({
+    required this.id,
+    required this.label,
+    required this.color,
+    required this.action,
+  });
+}
+
+const List<_TagOption> _tagOptions = [
+  _TagOption(
+    id: 'red',
+    label: 'Rojo',
+    color: Color(0xFFE25D5D),
+    action: _ItemAction.tagRed,
+  ),
+  _TagOption(
+    id: 'orange',
+    label: 'Naranja',
+    color: Color(0xFFF29F4B),
+    action: _ItemAction.tagOrange,
+  ),
+  _TagOption(
+    id: 'yellow',
+    label: 'Amarillo',
+    color: Color(0xFFF2D04B),
+    action: _ItemAction.tagYellow,
+  ),
+  _TagOption(
+    id: 'green',
+    label: 'Verde',
+    color: Color(0xFF4CC47F),
+    action: _ItemAction.tagGreen,
+  ),
+  _TagOption(
+    id: 'blue',
+    label: 'Azul',
+    color: Color(0xFF4BA3F2),
+    action: _ItemAction.tagBlue,
+  ),
+  _TagOption(
+    id: 'purple',
+    label: 'Violeta',
+    color: Color(0xFF8C6FF2),
+    action: _ItemAction.tagPurple,
+  ),
+  _TagOption(
+    id: 'pink',
+    label: 'Rosa',
+    color: Color(0xFFE26BAE),
+    action: _ItemAction.tagPink,
+  ),
+  _TagOption(
+    id: 'gray',
+    label: 'Gris',
+    color: Color(0xFF9AA3AF),
+    action: _ItemAction.tagGray,
+  ),
+];
 
 class _PathBar extends StatelessWidget {
   final String path;
@@ -4407,6 +5812,8 @@ class _ListView extends StatelessWidget {
   final bool sortAscending;
   final void Function(_SortField field) onSort;
   final bool Function(String path) isCut;
+  final Color? Function(String path) tagColorForPath;
+  final String? Function(String path) gitStatusForPath;
 
   const _ListView({
     super.key,
@@ -4422,6 +5829,8 @@ class _ListView extends StatelessWidget {
     required this.sortAscending,
     required this.onSort,
     required this.isCut,
+    required this.tagColorForPath,
+    required this.gitStatusForPath,
   });
 
   @override
@@ -4481,6 +5890,8 @@ class _ListView extends StatelessWidget {
             itemBuilder: (context, index) {
               final item = items[index];
               final isSelected = selectedPaths.contains(item.path);
+              final tagColor = tagColorForPath(item.path);
+              final gitStatus = gitStatusForPath(item.path);
               final row = Material(
                 color: Colors.transparent,
                 child: InkWell(
@@ -4498,11 +5909,23 @@ class _ListView extends StatelessWidget {
                       children: [
                         _buildItemIcon(context, item),
                         const SizedBox(width: 12),
+                        if (tagColor != null) ...[
+                          _TagDot(color: tagColor),
+                          const SizedBox(width: 8),
+                        ],
                         Expanded(
                           flex: 3,
-                          child: Text(
-                            item.name,
-                            overflow: TextOverflow.ellipsis,
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  item.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (gitStatus != null)
+                                _GitBadge(status: gitStatus),
+                            ],
                           ),
                         ),
                         Expanded(
@@ -4563,6 +5986,8 @@ class _ColumnsView extends StatefulWidget {
   final void Function(FileItem item, Offset position) onContextMenu;
   final void Function(FileItem source, FileItem targetFolder) onDropOnFolder;
   final bool Function(String path) isCut;
+  final Color? Function(String path) tagColorForPath;
+  final String? Function(String path) gitStatusForPath;
 
   const _ColumnsView({
     super.key,
@@ -4576,6 +6001,8 @@ class _ColumnsView extends StatefulWidget {
     required this.onContextMenu,
     required this.onDropOnFolder,
     required this.isCut,
+    required this.tagColorForPath,
+    required this.gitStatusForPath,
   });
 
   @override
@@ -4708,6 +6135,8 @@ class _ColumnsViewState extends State<_ColumnsView> {
                       onContextMenu: isLast ? widget.onContextMenu : null,
                       onDropOnFolder: isLast ? widget.onDropOnFolder : null,
                       isCut: isLast ? widget.isCut : null,
+                      tagColorForPath: widget.tagColorForPath,
+                      gitStatusForPath: widget.gitStatusForPath,
                     );
                   },
                 ),
@@ -4799,6 +6228,8 @@ class _ColumnList extends StatelessWidget {
   final void Function(FileItem item, Offset position)? onContextMenu;
   final void Function(FileItem source, FileItem targetFolder)? onDropOnFolder;
   final bool Function(String path)? isCut;
+  final Color? Function(String path)? tagColorForPath;
+  final String? Function(String path)? gitStatusForPath;
 
   const _ColumnList({
     required this.title,
@@ -4809,6 +6240,8 @@ class _ColumnList extends StatelessWidget {
     this.onContextMenu,
     this.onDropOnFolder,
     this.isCut,
+    this.tagColorForPath,
+    this.gitStatusForPath,
   });
 
   @override
@@ -4836,6 +6269,11 @@ class _ColumnList extends StatelessWidget {
             itemBuilder: (context, index) {
               final item = items[index];
               final selected = selectedPaths.contains(item.path);
+              final tagColor =
+                  tagColorForPath != null ? tagColorForPath!(item.path) : null;
+              final gitStatus = gitStatusForPath != null
+                  ? gitStatusForPath!(item.path)
+                  : null;
               final row = GestureDetector(
                 onDoubleTap: () => onOpen(item),
                 onLongPress: onContextMenu != null
@@ -4845,6 +6283,16 @@ class _ColumnList extends StatelessWidget {
                 child: ListTile(
                   dense: true,
                   leading: _buildItemIcon(context, item),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (tagColor != null) _TagDot(color: tagColor),
+                      if (gitStatus != null) ...[
+                        if (tagColor != null) const SizedBox(width: 6),
+                        _GitBadge(status: gitStatus),
+                      ],
+                    ],
+                  ),
                   title: Text(item.name, overflow: TextOverflow.ellipsis),
                   selected: selected,
                   selectedTileColor: Theme.of(context)
@@ -4898,6 +6346,8 @@ class _GridView extends StatelessWidget {
   final void Function(FileItem item, Offset position) onContextMenu;
   final void Function(FileItem source, FileItem targetFolder) onDropOnFolder;
   final bool Function(String path) isCut;
+  final Color? Function(String path) tagColorForPath;
+  final String? Function(String path) gitStatusForPath;
 
   const _GridView({
     super.key,
@@ -4908,6 +6358,8 @@ class _GridView extends StatelessWidget {
     required this.onContextMenu,
     required this.onDropOnFolder,
     required this.isCut,
+    required this.tagColorForPath,
+    required this.gitStatusForPath,
   });
 
   @override
@@ -4925,6 +6377,8 @@ class _GridView extends StatelessWidget {
       itemBuilder: (context, index) {
         final item = items[index];
         final isSelected = selectedPaths.contains(item.path);
+        final tagColor = tagColorForPath(item.path);
+        final gitStatus = gitStatusForPath(item.path);
         final tile = InkWell(
           onTap: () => onSelect(item, index, items),
           onDoubleTap: () => onOpen(item),
@@ -4935,38 +6389,62 @@ class _GridView extends StatelessWidget {
             selected: isSelected,
             padding: const EdgeInsets.all(12),
             borderRadius: BorderRadius.circular(12),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+            child: Stack(
               children: [
-                _isImageFile(item)
-                    ? ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.file(
-                          File(item.path),
-                          width: 56,
-                          height: 56,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Icon(
-                            AppIcons.image,
-                            size: 40,
-                            color: Theme.of(context).iconTheme.color,
-                          ),
-                        ),
-                      )
-                    : Icon(
-                        item.isDirectory ? AppIcons.folder : AppIcons.file,
-                        size: 40,
-                        color: item.isDirectory
-                            ? Theme.of(context).colorScheme.primary
-                            : Theme.of(context).iconTheme.color,
+                Column(
+                  children: [
+                    Expanded(
+                      child: Center(
+                        child: _isImageFile(item)
+                            ? ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.file(
+                                  File(item.path),
+                                  width: 56,
+                                  height: 56,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Icon(
+                                    AppIcons.image,
+                                    size: 40,
+                                    color: Theme.of(context).iconTheme.color,
+                                  ),
+                                ),
+                              )
+                            : Icon(
+                                item.isDirectory
+                                    ? AppIcons.folder
+                                    : AppIcons.file,
+                                size: 40,
+                                color: item.isDirectory
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Theme.of(context).iconTheme.color,
+                              ),
                       ),
-                const SizedBox(height: 12),
-                Text(
-                  item.name,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 36,
+                      child: Text(
+                        item.name,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                 ),
+                if (tagColor != null)
+                  Positioned(
+                    right: 4,
+                    top: 4,
+                    child: _TagDot(color: tagColor),
+                  ),
+                if (gitStatus != null)
+                  Positioned(
+                    left: 4,
+                    top: 4,
+                    child: _GitBadge(status: gitStatus),
+                  ),
               ],
             ),
           ),
@@ -5002,12 +6480,20 @@ class _StatusBar extends StatelessWidget {
   final int totalCount;
   final int selectedCount;
   final String currentPath;
+  final bool globalSearchEnabled;
+  final DateTime? globalSearchBuiltAt;
+  final String? gitRoot;
+  final String dragDropDefaultAction;
 
   const _StatusBar({
     required this.itemCount,
     required this.totalCount,
     required this.selectedCount,
     required this.currentPath,
+    required this.globalSearchEnabled,
+    required this.globalSearchBuiltAt,
+    required this.gitRoot,
+    required this.dragDropDefaultAction,
   });
 
   @override
@@ -5031,9 +6517,35 @@ class _StatusBar extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
+          Expanded(
+            child: Row(
+              children: [
+                if (globalSearchEnabled && globalSearchBuiltAt != null) ...[
+                  Text(
+                    'Índice: ${_formatDate(globalSearchBuiltAt!)}',
+                    style: Theme.of(context).textTheme.labelSmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(width: 12),
+                ],
+                if (gitRoot != null) ...[
+                  Text(
+                    'Git: ${_basename(gitRoot!)}',
+                    style: Theme.of(context).textTheme.labelSmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(width: 12),
+                ],
+                Text(
+                  'Arrastrar: ${_dragDropLabel(dragDropDefaultAction)}',
+                  style: Theme.of(context).textTheme.labelSmall,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
           const SizedBox(width: 10),
-          SizedBox(
-            width: 260,
+          Flexible(
             child: Text(
               currentPath,
               textAlign: TextAlign.right,
@@ -5043,6 +6555,32 @@ class _StatusBar extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  String _formatDate(DateTime date) {
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final year = date.year.toString();
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$day/$month/$year $hour:$minute';
+  }
+
+  String _basename(String path) {
+    if (path == '/') return '/';
+    final parts = path.split(Platform.pathSeparator);
+    return parts.isEmpty ? path : parts.last;
+  }
+}
+
+String _dragDropLabel(String value) {
+  switch (value) {
+    case 'copy':
+      return 'Copiar';
+    case 'move':
+      return 'Mover';
+    default:
+      return 'Preguntar';
   }
 }
 
@@ -5122,18 +6660,24 @@ class _Place {
   final IconData icon;
   final bool isCustom;
   final bool isHeader;
+  final String? subtitle;
+  final int? usagePercent;
 
   const _Place(
     this.label,
     this.path,
     this.icon, {
     this.isCustom = false,
+    this.subtitle,
+    this.usagePercent,
   }) : isHeader = false;
 
   const _Place.header(this.label)
       : path = '',
         icon = AppIcons.folder,
         isCustom = false,
+        subtitle = null,
+        usagePercent = null,
         isHeader = true;
 }
 
@@ -5147,6 +6691,13 @@ class _DetailsPanel extends StatelessWidget {
   final VoidCallback onZoomIn;
   final VoidCallback onZoomOut;
   final int selectedCount;
+  final String? Function(String path) tagLabelForPath;
+  final Color? Function(String path) tagColorForPath;
+  final List<String> history;
+  final Map<String, int> historyVisits;
+  final Map<String, DateTime> historyLastVisited;
+  final ValueChanged<String> onNavigate;
+  final VoidCallback onClearHistory;
 
   const _DetailsPanel({
     super.key,
@@ -5159,6 +6710,13 @@ class _DetailsPanel extends StatelessWidget {
     required this.onZoomIn,
     required this.onZoomOut,
     required this.selectedCount,
+    required this.tagLabelForPath,
+    required this.tagColorForPath,
+    required this.history,
+    required this.historyVisits,
+    required this.historyLastVisited,
+    required this.onNavigate,
+    required this.onClearHistory,
   });
 
   @override
@@ -5198,77 +6756,92 @@ class _DetailsPanel extends StatelessWidget {
                   ),
                 ],
               )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Detalles', style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 16),
-                  if (isImageFile(selectedItem!))
-                    Center(
-                      child: Column(
-                        children: [
-                          GestureDetector(
-                            onTap: () => _showImagePreviewDialog(
-                              context,
-                              selectedItem!.path,
-                            ),
-                            child: _ImagePreview(
-                              path: selectedItem!.path,
-                              size: previewSize,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              IconButton(
-                                tooltip: 'Zoom -',
-                                onPressed: onZoomOut,
-                                icon: const Icon(AppIcons.remove),
+            : SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Detalles', style: Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height: 16),
+                    if (isImageFile(selectedItem!))
+                      Center(
+                        child: Column(
+                          children: [
+                            GestureDetector(
+                              onTap: () => _showImagePreviewDialog(
+                                context,
+                                selectedItem!.path,
                               ),
-                              Text('${previewSize.toInt()} px'),
-                              IconButton(
-                                tooltip: 'Zoom +',
-                                onPressed: onZoomIn,
-                                icon: const Icon(AppIcons.add),
+                              child: _ImagePreview(
+                                path: selectedItem!.path,
+                                size: previewSize,
                               ),
-                            ],
-                          ),
-                        ],
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Zoom -',
+                                  onPressed: onZoomOut,
+                                  icon: const Icon(AppIcons.remove),
+                                ),
+                                Text('${previewSize.toInt()} px'),
+                                IconButton(
+                                  tooltip: 'Zoom +',
+                                  onPressed: onZoomIn,
+                                  icon: const Icon(AppIcons.add),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      _FilePreview(
+                        item: selectedItem!,
+                        fileService: fileService,
                       ),
-                    )
-                  else
-                    _FilePreview(
-                      item: selectedItem!,
-                      fileService: fileService,
+                    const SizedBox(height: 12),
+                    Text(
+                      selectedItem!.name,
+                      style: Theme.of(context).textTheme.bodyLarge,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  const SizedBox(height: 12),
-                  Text(
-                    selectedItem!.name,
-                    style: Theme.of(context).textTheme.bodyLarge,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 12),
-                  _DetailRow(
-                    label: 'Tipo',
-                    value: selectedItem!.isDirectory ? 'Carpeta' : 'Archivo',
-                  ),
-                  _DetailRow(
-                    label: 'Tamaño',
-                    value: selectedItem!.isDirectory
-                        ? '--'
-                        : formatBytes(selectedItem!.sizeBytes),
-                  ),
-                  _DetailRow(
-                    label: 'Modificado',
-                    value: formatDate(selectedItem!.modifiedAt),
-                  ),
-                  _DetailRow(
-                    label: 'Ruta',
-                    value: selectedItem!.path,
-                  ),
-                ],
+                    const SizedBox(height: 12),
+                    _TagDetailRow(
+                      label: 'Etiqueta',
+                      tagLabel: tagLabelForPath(selectedItem!.path),
+                      tagColor: tagColorForPath(selectedItem!.path),
+                    ),
+                    _DetailRow(
+                      label: 'Tipo',
+                      value: selectedItem!.isDirectory ? 'Carpeta' : 'Archivo',
+                    ),
+                    _DetailRow(
+                      label: 'Tamaño',
+                      value: selectedItem!.isDirectory
+                          ? '--'
+                          : formatBytes(selectedItem!.sizeBytes),
+                    ),
+                    _DetailRow(
+                      label: 'Modificado',
+                      value: formatDate(selectedItem!.modifiedAt),
+                    ),
+                    _DetailRow(
+                      label: 'Ruta',
+                      value: selectedItem!.path,
+                    ),
+                    const SizedBox(height: 16),
+                    _HistoryPanel(
+                      history: history,
+                      historyVisits: historyVisits,
+                      historyLastVisited: historyLastVisited,
+                      onNavigate: onNavigate,
+                      onClear: onClearHistory,
+                    ),
+                  ],
+                ),
               ),
       ),
     );
@@ -5725,6 +7298,261 @@ class _DetailRow extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _TagDetailRow extends StatelessWidget {
+  final String label;
+  final String? tagLabel;
+  final Color? tagColor;
+
+  const _TagDetailRow({
+    required this.label,
+    required this.tagLabel,
+    required this.tagColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final value = tagLabel ?? 'Sin etiqueta';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+          ),
+          Expanded(
+            flex: 4,
+            child: Row(
+              children: [
+                if (tagColor != null) ...[
+                  _TagDot(color: tagColor!, size: 10),
+                  const SizedBox(width: 6),
+                ],
+                Expanded(
+                  child: Text(
+                    value,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TagDot extends StatelessWidget {
+  final Color color;
+  final double size;
+
+  const _TagDot({
+    required this.color,
+    this.size = 8,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+      ),
+    );
+  }
+}
+
+class _GitBadge extends StatelessWidget {
+  final String status;
+
+  const _GitBadge({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    Color color;
+    switch (status) {
+      case 'M':
+        color = Colors.orangeAccent;
+        break;
+      case 'A':
+        color = Colors.greenAccent;
+        break;
+      case 'D':
+        color = Colors.redAccent;
+        break;
+      case '?':
+        color = theme.colorScheme.primary;
+        break;
+      default:
+        color = theme.colorScheme.primary;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        status,
+        style: theme.textTheme.labelSmall?.copyWith(color: color),
+      ),
+    );
+  }
+}
+
+class _BulkRenameConfig {
+  final String format;
+  final String find;
+  final String replace;
+  final bool useRegex;
+
+  const _BulkRenameConfig({
+    required this.format,
+    required this.find,
+    required this.replace,
+    required this.useRegex,
+  });
+}
+
+class _RenamePreset {
+  final String name;
+  final String format;
+  final String find;
+  final String replace;
+  final bool useRegex;
+
+  const _RenamePreset({
+    required this.name,
+    required this.format,
+    required this.find,
+    required this.replace,
+    required this.useRegex,
+  });
+
+  factory _RenamePreset.fromMap(Map<String, dynamic> map) {
+    return _RenamePreset(
+      name: map['name'] as String? ?? 'Preset',
+      format: map['format'] as String? ?? '{name}{ext}',
+      find: map['find'] as String? ?? '',
+      replace: map['replace'] as String? ?? '',
+      useRegex: map['useRegex'] as bool? ?? false,
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+        'name': name,
+        'format': format,
+        'find': find,
+        'replace': replace,
+        'useRegex': useRegex,
+      };
+}
+
+class _HistoryPanel extends StatelessWidget {
+  final List<String> history;
+  final Map<String, int> historyVisits;
+  final Map<String, DateTime> historyLastVisited;
+  final ValueChanged<String> onNavigate;
+  final VoidCallback onClear;
+
+  const _HistoryPanel({
+    required this.history,
+    required this.historyVisits,
+    required this.historyLastVisited,
+    required this.onNavigate,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final items = history.reversed.toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child:
+                  Text('Historial', style: Theme.of(context).textTheme.titleSmall),
+            ),
+            TextButton(
+              onPressed: onClear,
+              child: const Text('Limpiar'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (items.isEmpty)
+          Text(
+            'Sin historial aún.',
+            style: Theme.of(context).textTheme.bodySmall,
+          )
+        else
+          SizedBox(
+            height: 160,
+            child: ListView.separated(
+              itemCount: items.length,
+              separatorBuilder: (_, __) => Divider(
+                height: 1,
+                color: Theme.of(context).dividerColor,
+              ),
+              itemBuilder: (context, index) {
+                final path = items[index];
+                final label = path == '/' ? 'Root' : path.split('/').last;
+                final visits = historyVisits[path] ?? 0;
+                final lastVisited = historyLastVisited[path];
+                return ListTile(
+                  dense: true,
+                  leading: Icon(
+                    AppIcons.folder,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  title: Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        path,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        'Visitas: $visits'
+                        '${lastVisited != null ? ' · Último: ${_formatHistoryDate(lastVisited)}' : ''}',
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    ],
+                  ),
+                  onTap: () => onNavigate(path),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  String _formatHistoryDate(DateTime date) {
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final year = date.year.toString();
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$day/$month/$year $hour:$minute';
   }
 }
 

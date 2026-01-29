@@ -6,6 +6,7 @@ class SearchQuery {
   final int? maxBytes;
   final DateTime? minDate;
   final DateTime? maxDate;
+  final String? gitStatus;
 
   const SearchQuery({
     required this.nameTerms,
@@ -15,6 +16,7 @@ class SearchQuery {
     this.maxBytes,
     this.minDate,
     this.maxDate,
+    this.gitStatus,
   });
 }
 
@@ -31,6 +33,7 @@ SearchQuery parseSearchQuery(String raw) {
   int? maxBytes;
   DateTime? minDate;
   DateTime? maxDate;
+  String? gitStatus;
   final nameTerms = <String>[];
 
   for (final token in tokens) {
@@ -63,6 +66,10 @@ SearchQuery parseSearchQuery(String raw) {
       maxDate = _parseDate(lower.split('<').last);
       continue;
     }
+    if (lower.startsWith('git:') || lower.startsWith('status:')) {
+      gitStatus = _parseGitStatus(lower.split(':').last);
+      continue;
+    }
     nameTerms.add(lower);
   }
 
@@ -74,7 +81,27 @@ SearchQuery parseSearchQuery(String raw) {
     maxBytes: maxBytes,
     minDate: minDate,
     maxDate: maxDate,
+    gitStatus: gitStatus,
   );
+}
+
+String? _parseGitStatus(String raw) {
+  switch (raw) {
+    case 'modified':
+    case 'm':
+      return 'M';
+    case 'added':
+    case 'a':
+      return 'A';
+    case 'deleted':
+    case 'd':
+      return 'D';
+    case 'untracked':
+    case '?':
+      return '?';
+    default:
+      return null;
+  }
 }
 
 int? _parseSize(String raw) {

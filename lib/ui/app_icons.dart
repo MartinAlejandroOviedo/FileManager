@@ -49,4 +49,6 @@ class AppIcons {
   static const IconData play = LucideIcons.play;
   static const IconData pause = LucideIcons.pause;
   static const IconData stop = LucideIcons.square;
+  static const IconData globe = LucideIcons.globe;
+  static const IconData help = LucideIcons.circleHelp;
 }
