@@ -25,6 +25,7 @@ class FileManagerApp extends StatelessWidget {
       animation: themeController,
       builder: (context, _) => MaterialApp(
         title: 'File Manager',
+        debugShowCheckedModeBanner: false,
         theme: NiceOSTheme.lightThemeData,
         darkTheme: NiceOSTheme.themeData,
         themeMode: themeController.mode,

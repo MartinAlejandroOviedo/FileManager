@@ -3687,28 +3687,6 @@ class _MainScreenState extends State<MainScreen> {
         gitStatusForPath: _gitStatusForPath,
       );
     }
-    if (_viewMode == _ViewMode.columns) {
-      return _ColumnsView(
-        fileService: _fileService,
-        currentPath: pane.currentPath,
-        items: visibleItems,
-        selectedPaths: pane.selectedPaths,
-        onSelect: (item, index, items) =>
-            _selectItemForPane(item, index, items, isRight),
-        onOpen: (item) => _openItemForPane(item, isRight),
-        onNavigate: (path) => _navigateToPane(path, pane),
-        onContextMenu: (item, pos) =>
-            _showItemContextMenuForPane(item, pos, isRight),
-        onDropOnFolder: (source, target) => _moveItemToFolder(
-          source,
-          target,
-        ),
-        isCut: (path) =>
-            _memoryClipboardIsCut && _memoryClipboardPaths.contains(path),
-        tagColorForPath: _tagColorForPath,
-        gitStatusForPath: _gitStatusForPath,
-      );
-    }
     return _ListView(
       items: visibleItems,
       selectedPaths: pane.selectedPaths,
@@ -3837,7 +3815,6 @@ class _MainScreenState extends State<MainScreen> {
                         onToggleHidden: _toggleHidden,
                         onSetViewList: () => _setViewMode(_ViewMode.list),
                         onSetViewGrid: () => _setViewMode(_ViewMode.grid),
-                        onSetViewColumns: () => _setViewMode(_ViewMode.columns),
                         onSortByName: () => _toggleSort(_SortField.name),
                         onSortBySize: () => _toggleSort(_SortField.size),
                         onSortByModified: () => _toggleSort(_SortField.modified),
@@ -3895,13 +3872,11 @@ class _MainScreenState extends State<MainScreen> {
                         onUp: _goUp,
                         onRefresh: _loadFiles,
         onToggleView: () {
-                          if (_viewMode == _ViewMode.list) {
-                            _setViewMode(_ViewMode.grid);
-                          } else if (_viewMode == _ViewMode.grid) {
-                            _setViewMode(_ViewMode.columns);
-                          } else {
-                            _setViewMode(_ViewMode.list);
-                          }
+                          _setViewMode(
+                            _viewMode == _ViewMode.list
+                                ? _ViewMode.grid
+                                : _ViewMode.list,
+                          );
                         },
                         onNewFolder: _createFolder,
                         onRename: _renameSelected,
@@ -4718,7 +4693,6 @@ class _AppMenuBar extends StatelessWidget {
   final VoidCallback onToggleHidden;
   final VoidCallback onSetViewList;
   final VoidCallback onSetViewGrid;
-  final VoidCallback onSetViewColumns;
   final VoidCallback onSortByName;
   final VoidCallback onSortBySize;
   final VoidCallback onSortByModified;
@@ -4759,7 +4733,6 @@ class _AppMenuBar extends StatelessWidget {
     required this.onToggleHidden,
     required this.onSetViewList,
     required this.onSetViewGrid,
-    required this.onSetViewColumns,
     required this.onSortByName,
     required this.onSortBySize,
     required this.onSortByModified,
@@ -4835,10 +4808,6 @@ class _AppMenuBar extends StatelessWidget {
                     MenuItemButton(
                       onPressed: onSetViewGrid,
                       child: const Text('Vista cuadrícula'),
-                    ),
-                    MenuItemButton(
-                      onPressed: onSetViewColumns,
-                      child: const Text('Vista columnas'),
                     ),
                     // toggle rápido (toolbar) permanece, aquí dejamos opciones directas
                     CheckboxMenuButton(
@@ -5013,7 +4982,6 @@ enum _SortField {
 enum _ViewMode {
   list,
   grid,
-  columns,
 }
 
 class _MountGroups {
@@ -5975,369 +5943,6 @@ class _ListView extends StatelessWidget {
   }
 }
 
-class _ColumnsView extends StatefulWidget {
-  final FileService fileService;
-  final String currentPath;
-  final List<FileItem> items;
-  final Set<String> selectedPaths;
-  final void Function(FileItem item, int index, List<FileItem> items) onSelect;
-  final void Function(FileItem item) onOpen;
-  final void Function(String path) onNavigate;
-  final void Function(FileItem item, Offset position) onContextMenu;
-  final void Function(FileItem source, FileItem targetFolder) onDropOnFolder;
-  final bool Function(String path) isCut;
-  final Color? Function(String path) tagColorForPath;
-  final String? Function(String path) gitStatusForPath;
-
-  const _ColumnsView({
-    super.key,
-    required this.fileService,
-    required this.currentPath,
-    required this.items,
-    required this.selectedPaths,
-    required this.onSelect,
-    required this.onOpen,
-    required this.onNavigate,
-    required this.onContextMenu,
-    required this.onDropOnFolder,
-    required this.isCut,
-    required this.tagColorForPath,
-    required this.gitStatusForPath,
-  });
-
-  @override
-  State<_ColumnsView> createState() => _ColumnsViewState();
-}
-
-class _ColumnsViewState extends State<_ColumnsView> {
-  String _columnQuery = '';
-  final ScrollController _columnsController = ScrollController();
-  final Map<String, List<FileItem>> _columnsCache = {};
-  final int _maxColumns = 4;
-
-  @override
-  void didUpdateWidget(covariant _ColumnsView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.currentPath != widget.currentPath) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_columnsController.hasClients) {
-          _columnsController.jumpTo(_columnsController.position.maxScrollExtent);
-        }
-      });
-    }
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_columnsController.hasClients) {
-        _columnsController.jumpTo(_columnsController.position.maxScrollExtent);
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _columnsController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final pathParts = _buildPathChain(widget.currentPath);
-    final visibleParts = pathParts.length <= _maxColumns
-        ? pathParts
-        : pathParts.sublist(pathParts.length - _maxColumns);
-    final filteredItems = _columnQuery.trim().isEmpty
-        ? widget.items
-        : widget.items
-            .where((item) =>
-                item.name.toLowerCase().contains(_columnQuery.toLowerCase()))
-            .toList();
-
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            border: Border(
-              bottom: BorderSide(color: Theme.of(context).dividerColor),
-            ),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Wrap(
-                  spacing: 6,
-                  children: pathParts.map((path) {
-                    final label = path == '/' ? 'Root' : path.split('/').last;
-                    return TextButton(
-                      onPressed: () => widget.onNavigate(path),
-                      child: Text(label),
-                    );
-                  }).toList(),
-                ),
-              ),
-              SizedBox(
-                width: 180,
-                child: TextField(
-                  decoration: const InputDecoration(
-                    hintText: 'Buscar en columnas',
-                    isDense: true,
-                    prefixIcon: Icon(AppIcons.search),
-                  ),
-                  onChanged: (value) => setState(() => _columnQuery = value),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: ListView.separated(
-            controller: _columnsController,
-            scrollDirection: Axis.horizontal,
-            itemCount: visibleParts.length + 1,
-            separatorBuilder: (_, __) =>
-                VerticalDivider(width: 1, color: Theme.of(context).dividerColor),
-            itemBuilder: (context, index) {
-              if (index == visibleParts.length) {
-                FileItem? selectedItem;
-                if (widget.selectedPaths.length == 1 &&
-                    widget.items.isNotEmpty) {
-                  final path = widget.selectedPaths.first;
-                  selectedItem = widget.items.firstWhere(
-                    (i) => i.path == path,
-                    orElse: () => widget.items.first,
-                  );
-                }
-                return _ColumnPreview(
-                  item: selectedItem,
-                  previewSize: 180,
-                );
-              }
-              final path = visibleParts[index];
-              final isLast = path == widget.currentPath;
-              return SizedBox(
-                width: 260,
-                child: FutureBuilder<List<FileItem>>(
-                  future: _loadColumn(path),
-                  builder: (context, snapshot) {
-                    final list = snapshot.data ?? [];
-                    final items = isLast ? filteredItems : list.where((i) => i.isDirectory).toList();
-                    return _ColumnList(
-                      title: path,
-                      items: items,
-                      selectedPaths: isLast ? widget.selectedPaths : {widget.currentPath},
-                      onSelect: isLast ? widget.onSelect : null,
-                      onOpen: widget.onOpen,
-                      onContextMenu: isLast ? widget.onContextMenu : null,
-                      onDropOnFolder: isLast ? widget.onDropOnFolder : null,
-                      isCut: isLast ? widget.isCut : null,
-                      tagColorForPath: widget.tagColorForPath,
-                      gitStatusForPath: widget.gitStatusForPath,
-                    );
-                  },
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Future<List<FileItem>> _loadColumn(String path) async {
-    if (_columnsCache.containsKey(path)) {
-      return _columnsCache[path]!;
-    }
-    final items = await widget.fileService.listDirectory(path);
-    _columnsCache[path] = items;
-    return items;
-  }
-
-  List<String> _buildPathChain(String path) {
-    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
-    final chain = <String>['/'];
-    var current = '';
-    for (final part in parts) {
-      current = current.isEmpty ? '/$part' : '$current/$part';
-      chain.add(current);
-    }
-    return chain;
-  }
-}
-
-class _ColumnPreview extends StatelessWidget {
-  final FileItem? item;
-  final double previewSize;
-
-  const _ColumnPreview({
-    required this.item,
-    required this.previewSize,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (item == null) {
-      return const SizedBox(width: 220);
-    }
-    return SizedBox(
-      width: 220,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Preview', style: Theme.of(context).textTheme.bodyMedium),
-            const SizedBox(height: 8),
-            if (_isImageFile(item!))
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: _ImagePreview(
-                  path: item!.path,
-                  size: previewSize,
-                  fit: BoxFit.cover,
-                ),
-              )
-            else
-              Icon(
-                item!.isDirectory ? AppIcons.folder : AppIcons.file,
-                size: 48,
-              ),
-            const SizedBox(height: 8),
-            Text(
-              item!.name,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ColumnList extends StatelessWidget {
-  final String title;
-  final List<FileItem> items;
-  final Set<String> selectedPaths;
-  final void Function(FileItem item, int index, List<FileItem> items)? onSelect;
-  final void Function(FileItem item) onOpen;
-  final void Function(FileItem item, Offset position)? onContextMenu;
-  final void Function(FileItem source, FileItem targetFolder)? onDropOnFolder;
-  final bool Function(String path)? isCut;
-  final Color? Function(String path)? tagColorForPath;
-  final String? Function(String path)? gitStatusForPath;
-
-  const _ColumnList({
-    required this.title,
-    required this.items,
-    required this.selectedPaths,
-    this.onSelect,
-    required this.onOpen,
-    this.onContextMenu,
-    this.onDropOnFolder,
-    this.isCut,
-    this.tagColorForPath,
-    this.gitStatusForPath,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            border: Border(
-              bottom: BorderSide(color: Theme.of(context).dividerColor),
-            ),
-          ),
-          child: Text(
-            title,
-            style: Theme.of(context).textTheme.bodyMedium,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        Expanded(
-          child: ListView.builder(
-            itemCount: items.length,
-            itemBuilder: (context, index) {
-              final item = items[index];
-              final selected = selectedPaths.contains(item.path);
-              final tagColor =
-                  tagColorForPath != null ? tagColorForPath!(item.path) : null;
-              final gitStatus = gitStatusForPath != null
-                  ? gitStatusForPath!(item.path)
-                  : null;
-              final row = GestureDetector(
-                onDoubleTap: () => onOpen(item),
-                onLongPress: onContextMenu != null
-                    ? () => onContextMenu!(
-                        item, const Offset(120, 120))
-                    : null,
-                child: ListTile(
-                  dense: true,
-                  leading: _buildItemIcon(context, item),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (tagColor != null) _TagDot(color: tagColor),
-                      if (gitStatus != null) ...[
-                        if (tagColor != null) const SizedBox(width: 6),
-                        _GitBadge(status: gitStatus),
-                      ],
-                    ],
-                  ),
-                  title: Text(item.name, overflow: TextOverflow.ellipsis),
-                  selected: selected,
-                  selectedTileColor: Theme.of(context)
-                      .colorScheme
-                      .primary
-                      .withValues(alpha: 0.18),
-                  onTap: onSelect != null
-                      ? () => onSelect!(item, index, items)
-                      : null,
-                ),
-              );
-              if (onDropOnFolder == null) {
-                return Opacity(
-                  opacity: isCut != null && isCut!(item.path) ? 0.45 : 1,
-                  child: row,
-                );
-              }
-              return DragTarget<FileItem>(
-                onWillAcceptWithDetails: (details) =>
-                    item.isDirectory && details.data.path != item.path,
-                onAcceptWithDetails: (details) =>
-                    onDropOnFolder!(details.data, item),
-                builder: (context, candidateData, rejectedData) => Draggable<
-                    FileItem>(
-                  data: item,
-                  feedback: _DragFeedback(
-                    name: item.name,
-                    isDirectory: item.isDirectory,
-                  ),
-                  childWhenDragging: Opacity(opacity: 0.4, child: row),
-                  child: Opacity(
-                    opacity:
-                        isCut != null && isCut!(item.path) ? 0.45 : 1,
-                    child: row,
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 class _GridView extends StatelessWidget {
   final List<FileItem> items;
   final Set<String> selectedPaths;
@@ -6371,7 +5976,7 @@ class _GridView extends StatelessWidget {
         crossAxisCount: 4,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
-        childAspectRatio: 1.1,
+        mainAxisExtent: 132,
       ),
       itemCount: items.length,
       itemBuilder: (context, index) {
