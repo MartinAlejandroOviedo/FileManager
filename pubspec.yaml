@@ -1,0 +1,37 @@
+name: file_manager
+version: 0.1.0
+publish_to: 'none'
+description: File Manager modular para Linux con Flutter
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_svg: ^2.0.10
+  lucide_icons_flutter: ^1.0.0
+  lottie: ^2.7.0
+  package_info_plus: ^8.0.3
+  flutter_markdown: ^0.7.3
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/lottie/niceos_splash.json
+    - assets/lottie/right_panel/
+
+flutter_icons:
+  android: true
+  ios: true
+  linux: true
+  image_path: assets/icon/app_icon.png
