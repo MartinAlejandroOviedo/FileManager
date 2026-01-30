@@ -1,7 +1,9 @@
-build/
-.dart_tool/
-.packages
-pubspec.lock
-.idea/
-.vscode/
-*.iml
+# Ignore everything by default
+/*
+
+# Keep the releases folder tracked
+!/releases/
+!/releases/**
+
+# Keep gitignore itself
+!.gitignore
