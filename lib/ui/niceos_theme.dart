@@ -60,8 +60,9 @@ class NiceOSTheme {
         ),
         textTheme: const TextTheme(
           headlineSmall: TextStyle(
-            fontSize: 20,
+            fontSize: 22,
             fontWeight: FontWeight.w700,
+            letterSpacing: -0.2,
             color: textPrimary,
           ),
           titleLarge: TextStyle(
@@ -70,16 +71,16 @@ class NiceOSTheme {
             color: textPrimary,
           ),
           titleMedium: TextStyle(
-            fontSize: 16,
+            fontSize: 15,
             fontWeight: FontWeight.w600,
             color: textPrimary,
           ),
           bodyLarge: TextStyle(
-            fontSize: 15,
+            fontSize: 14,
             color: textPrimary,
           ),
           bodyMedium: TextStyle(
-            fontSize: 14,
+            fontSize: 13,
             color: textSecondary,
           ),
           bodySmall: TextStyle(
@@ -87,9 +88,22 @@ class NiceOSTheme {
             color: textMuted,
           ),
           labelLarge: TextStyle(
-            fontSize: 13,
+            fontSize: 12,
             fontWeight: FontWeight.w600,
+            letterSpacing: 0.2,
             color: textPrimary,
+          ),
+          labelMedium: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.4,
+            color: textSecondary,
+          ),
+          labelSmall: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.6,
+            color: textMuted,
           ),
         ),
         appBarTheme: const AppBarTheme(
@@ -102,7 +116,7 @@ class NiceOSTheme {
           ),
           iconTheme: IconThemeData(color: accentBlue),
         ),
-        iconTheme: const IconThemeData(color: accentTeal, size: 20),
+        iconTheme: const IconThemeData(color: accentTeal, size: 18),
         dividerColor: border,
         cardColor: surface,
         shadowColor: Colors.black54,
@@ -131,6 +145,7 @@ class NiceOSTheme {
         popupMenuTheme: const PopupMenuThemeData(
           color: surfaceElevated,
           textStyle: TextStyle(color: textPrimary),
+          elevation: 8,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.all(Radius.circular(radiusMd)),
           ),
@@ -173,6 +188,7 @@ class NiceOSTheme {
           filled: true,
           fillColor: surfaceAlt,
           hintStyle: TextStyle(color: textMuted),
+          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
@@ -224,8 +240,9 @@ class NiceOSTheme {
         ),
         textTheme: const TextTheme(
           headlineSmall: TextStyle(
-            fontSize: 20,
+            fontSize: 22,
             fontWeight: FontWeight.w700,
+            letterSpacing: -0.2,
             color: lightTextPrimary,
           ),
           titleLarge: TextStyle(
@@ -234,16 +251,16 @@ class NiceOSTheme {
             color: lightTextPrimary,
           ),
           titleMedium: TextStyle(
-            fontSize: 16,
+            fontSize: 15,
             fontWeight: FontWeight.w600,
             color: lightTextPrimary,
           ),
           bodyLarge: TextStyle(
-            fontSize: 15,
+            fontSize: 14,
             color: lightTextPrimary,
           ),
           bodyMedium: TextStyle(
-            fontSize: 14,
+            fontSize: 13,
             color: lightTextSecondary,
           ),
           bodySmall: TextStyle(
@@ -251,9 +268,22 @@ class NiceOSTheme {
             color: lightTextMuted,
           ),
           labelLarge: TextStyle(
-            fontSize: 13,
+            fontSize: 12,
             fontWeight: FontWeight.w600,
+            letterSpacing: 0.2,
             color: lightTextPrimary,
+          ),
+          labelMedium: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.4,
+            color: lightTextSecondary,
+          ),
+          labelSmall: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.6,
+            color: lightTextMuted,
           ),
         ),
         appBarTheme: const AppBarTheme(
@@ -266,7 +296,7 @@ class NiceOSTheme {
           ),
           iconTheme: IconThemeData(color: accentBlue),
         ),
-        iconTheme: const IconThemeData(color: accentTeal, size: 20),
+        iconTheme: const IconThemeData(color: accentTeal, size: 18),
         dividerColor: lightBorder,
         cardColor: lightSurface,
         shadowColor: Colors.black12,
@@ -295,6 +325,7 @@ class NiceOSTheme {
         popupMenuTheme: const PopupMenuThemeData(
           color: lightSurfaceElevated,
           textStyle: TextStyle(color: lightTextPrimary),
+          elevation: 6,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.all(Radius.circular(radiusMd)),
           ),
@@ -337,6 +368,7 @@ class NiceOSTheme {
           filled: true,
           fillColor: lightSurfaceAlt,
           hintStyle: TextStyle(color: lightTextMuted),
+          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(

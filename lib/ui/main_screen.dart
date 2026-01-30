@@ -73,7 +73,7 @@ class _MainScreenState extends State<MainScreen> {
   _ViewMode _viewMode = _ViewMode.list;
   bool _showDetailsPanel = true;
   bool _showHidden = false;
-  bool _dualPane = true;
+  final bool _dualPane = true;
   bool _globalSearchEnabled = false;
   bool _globalSearchLoading = false;
   String? _globalSearchError;
@@ -100,6 +100,7 @@ class _MainScreenState extends State<MainScreen> {
   final Map<String, String> _archiveCache = {};
   final Map<String, int> _historyVisits = {};
   final Map<String, DateTime> _historyLastVisited = {};
+  double _panelOpacity = 0.9;
   late final _PaneData _leftPane;
   late final _PaneData _rightPane;
   bool _isRightActive = false;
@@ -113,9 +114,6 @@ class _MainScreenState extends State<MainScreen> {
 
   List<FileItem> get _items => _activePane.items;
   set _items(List<FileItem> value) => _activePane.items = value;
-
-  String? get _errorMessage => _activePane.errorMessage;
-  set _errorMessage(String? value) => _activePane.errorMessage = value;
 
   Set<String> get _selectedPaths => _activePane.selectedPaths;
   set _selectedPaths(Set<String> value) => _activePane.selectedPaths = value;
@@ -354,7 +352,7 @@ class _MainScreenState extends State<MainScreen> {
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Cancelar'),
           ),
-          TextButton(
+          FilledButton(
             onPressed: () =>
                 Navigator.of(context).pop(controller.text.trim()),
             child: const Text('Abrir'),
@@ -454,7 +452,7 @@ class _MainScreenState extends State<MainScreen> {
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Cancelar'),
           ),
-          TextButton(
+          FilledButton(
             onPressed: () =>
                 Navigator.of(context).pop(controller.text.trim()),
             child: const Text('Guardar'),
@@ -918,18 +916,6 @@ class _MainScreenState extends State<MainScreen> {
     _pathFocusNode.requestFocus();
   }
 
-  void _finishPathEdit({required bool navigate}) {
-    final target = _pathController.text.trim();
-    setState(() {
-      _isEditingPath = false;
-    });
-    if (navigate && target.isNotEmpty) {
-      _navigateTo(target);
-    } else {
-      _pathController.text = _currentPath;
-    }
-  }
-
   void _startPathEditForPane(_PaneData pane) {
     setState(() {
       pane.isEditingPath = true;
@@ -1341,7 +1327,6 @@ class _MainScreenState extends State<MainScreen> {
       final parts = lines[1].split(RegExp(r'\s+'));
       if (parts.length < 6) return null;
       final total = int.tryParse(parts[1]) ?? 0;
-      final used = int.tryParse(parts[2]) ?? 0;
       final available = int.tryParse(parts[3]) ?? 0;
       final percentRaw = parts[4].replaceAll('%', '');
       final percent = int.tryParse(percentRaw);
@@ -1781,7 +1766,7 @@ class _MainScreenState extends State<MainScreen> {
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Cancelar'),
           ),
-          TextButton(
+          FilledButton(
             onPressed: () => Navigator.of(context).pop(selected),
             child: const Text('Aceptar'),
           ),
@@ -2064,7 +2049,7 @@ class _MainScreenState extends State<MainScreen> {
               children: [
                 if (_renamePresets.isNotEmpty)
                   DropdownButtonFormField<String>(
-                    value: selectedPreset,
+                    initialValue: selectedPreset,
                     decoration: const InputDecoration(
                       labelText: 'Preset',
                     ),
@@ -2413,12 +2398,6 @@ class _MainScreenState extends State<MainScreen> {
         _activePane.currentPath == sourcePath) {
       _loadFiles();
     }
-  }
-
-  bool _isCopyModifierPressed() {
-    final keys = HardwareKeyboard.instance.logicalKeysPressed;
-    return keys.contains(LogicalKeyboardKey.controlLeft) ||
-        keys.contains(LogicalKeyboardKey.controlRight);
   }
 
   bool? _resolveDragDropAction() {
@@ -3399,6 +3378,7 @@ class _MainScreenState extends State<MainScreen> {
     _saveSettings();
   }
 
+
   void _loadSettings() {
     final file = File(_settingsPath());
     if (!file.existsSync()) {
@@ -3420,6 +3400,8 @@ class _MainScreenState extends State<MainScreen> {
           [_homePath];
       _globalSearchRoots = roots.isEmpty ? [_homePath] : roots;
       _previewSize = (data['previewSize'] as num?)?.toDouble() ?? _previewSize;
+      _panelOpacity =
+          (data['panelOpacity'] as num?)?.toDouble() ?? _panelOpacity;
       final sort = data['sortField'] as String?;
       _sortField = _SortField.values.firstWhere(
         (v) => v.name == sort,
@@ -3556,6 +3538,7 @@ class _MainScreenState extends State<MainScreen> {
         ),
       ),
       'dragDropDefaultAction': _dragDropDefaultAction,
+      'panelOpacity': _panelOpacity,
       'tabs': tabsData,
       'activeTabIndex': _activeTabIndex,
     };
@@ -3592,10 +3575,55 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  void _showPanelOpacityDialog() {
+    var temp = _panelOpacity;
+    showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Transparencia de paneles'),
+          content: SizedBox(
+            width: 260,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('${(temp * 100).round()}%'),
+                Slider(
+                  value: temp,
+                  min: 0.6,
+                  max: 1.0,
+                  divisions: 8,
+                  onChanged: (value) {
+                    setState(() => temp = value);
+                    if (!mounted) return;
+                    this.setState(() {
+                      _panelOpacity = value;
+                    });
+                    _saveSettings();
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cerrar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildPane(_PaneData pane, bool isRight) {
     final visibleItems = _visibleItemsForPane(pane);
     final isActive = _activePane == pane;
     final isGlobalSearch = _isGlobalSearchActive(pane.searchQuery);
+    final panelColor = Theme.of(context)
+        .colorScheme
+        .surface
+        .withValues(alpha: _panelOpacity);
     return GestureDetector(
       onTapDown: (_) => _activatePane(isRight),
       onSecondaryTapDown: (details) =>
@@ -3604,6 +3632,7 @@ class _MainScreenState extends State<MainScreen> {
         duration: const Duration(milliseconds: 140),
         curve: Curves.easeOut,
         decoration: BoxDecoration(
+          color: panelColor,
           border: Border.all(
             color: isActive
                 ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.5)
@@ -3622,6 +3651,7 @@ class _MainScreenState extends State<MainScreen> {
               onStartEdit: () => _startPathEditForPane(pane),
               onFinishEdit: ({required bool navigate}) =>
                   _finishPathEditForPane(pane, navigate: navigate),
+              panelOpacity: _panelOpacity,
             ),
             Expanded(
               child: DragTarget<FileItem>(
@@ -3634,9 +3664,17 @@ class _MainScreenState extends State<MainScreen> {
                 builder: (context, candidateData, rejectedData) => isGlobalSearch
                     ? _buildGlobalSearchPane(visibleItems, pane, isRight)
                     : pane.errorMessage != null
-                        ? _EmptyState(message: pane.errorMessage!)
+                        ? _EmptyState(
+                            message: 'No se pudo abrir la carpeta',
+                            subtitle: pane.errorMessage,
+                            icon: AppIcons.info,
+                          )
                         : visibleItems.isEmpty
-                            ? const _EmptyState(message: 'No hay elementos aquí.')
+                            ? const _EmptyState(
+                                message: 'Carpeta vacía',
+                                subtitle: 'No hay elementos en esta carpeta.',
+                                icon: AppIcons.folderX,
+                              )
                             : _buildItemsView(visibleItems, pane, isRight),
               ),
             ),
@@ -3652,13 +3690,26 @@ class _MainScreenState extends State<MainScreen> {
     bool isRight,
   ) {
     if (_globalSearchLoading) {
-      return const _EmptyState(message: 'Indexando /home...');
+      return const _EmptyState(
+        message: 'Indexando /home',
+        subtitle: 'Esto puede tardar unos minutos.',
+        icon: AppIcons.search,
+        isLoading: true,
+      );
     }
     if (_globalSearchError != null) {
-      return _EmptyState(message: _globalSearchError!);
+      return _EmptyState(
+        message: 'Error de búsqueda',
+        subtitle: _globalSearchError,
+        icon: AppIcons.info,
+      );
     }
     if (visibleItems.isEmpty) {
-      return const _EmptyState(message: 'No hay resultados.');
+      return const _EmptyState(
+        message: 'Sin resultados',
+        subtitle: 'Prueba con otro término o ruta.',
+        icon: AppIcons.search,
+      );
     }
     return _buildItemsView(visibleItems, pane, isRight);
   }
@@ -3704,6 +3755,7 @@ class _MainScreenState extends State<MainScreen> {
       sortField: _sortField,
       sortAscending: _sortAscending,
       onSort: _toggleSort,
+      panelOpacity: _panelOpacity,
       isCut: (path) =>
           _memoryClipboardIsCut && _memoryClipboardPaths.contains(path),
       tagColorForPath: _tagColorForPath,
@@ -3762,11 +3814,32 @@ class _MainScreenState extends State<MainScreen> {
         child: Focus(
           autofocus: true,
           child: Scaffold(
-            body: Row(
+            backgroundColor: Colors.transparent,
+            body: Stack(
               children: [
-          _Sidebar(
-            currentPath: _currentPath,
-            places: _places,
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Theme.of(context).colorScheme.background,
+                          Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest
+                              .withValues(alpha: 0.6),
+                          Theme.of(context).colorScheme.background,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Row(
+                  children: [
+            _Sidebar(
+              currentPath: _currentPath,
+              places: _places,
             onAddPlace: _addCustomPlace,
             onRemovePlace: _removeCustomPlace,
             onEditPlace: _editCustomPlace,
@@ -3777,6 +3850,7 @@ class _MainScreenState extends State<MainScreen> {
             onUnmountRemote: _unmountRemote,
             onRefreshRemotes: _loadRcloneRemotes,
             onNavigate: _navigateTo,
+            panelOpacity: _panelOpacity,
           ),
                 Expanded(
                   child: Column(
@@ -3792,10 +3866,11 @@ class _MainScreenState extends State<MainScreen> {
                         themeMode: themeController.mode,
                         dragDropDefaultAction: _dragDropDefaultAction,
                         onDragDropActionChanged: (value) {
-                          if (value == null) return;
                           setState(() => _dragDropDefaultAction = value);
                           _saveSettings();
                         },
+                        panelOpacity: _panelOpacity,
+                        onOpenPanelOpacity: _showPanelOpacityDialog,
                         onNewFolder: _createFolder,
                         onUndo: _undoLastAction,
                         onRename: _renameSelected,
@@ -3900,6 +3975,7 @@ class _MainScreenState extends State<MainScreen> {
                         onReindexGlobalSearch: _reindexGlobalSearch,
                         dragDropDefaultAction: _dragDropDefaultAction,
                         onCycleDragDropAction: _cycleDragDropAction,
+                        panelOpacity: _panelOpacity,
                       ),
                       Expanded(
                         child: _dualPane
@@ -3981,11 +4057,14 @@ class _MainScreenState extends State<MainScreen> {
                     historyLastVisited: _historyLastVisited,
                     onNavigate: _navigateTo,
                     onClearHistory: _clearHistoryPanel,
+                    panelOpacity: _panelOpacity,
                   )
                 : const SizedBox.shrink(
                     key: ValueKey('details-hidden'),
                   ),
           ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -4398,16 +4477,20 @@ class _BreadcrumbChipState extends State<_BreadcrumbChip> {
         .colorScheme
         .surfaceContainerHighest
         .withValues(alpha: 0.7);
+    final textStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        );
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),
         curve: Curves.easeOut,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
         decoration: BoxDecoration(
           color: _hovered ? hover : base,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(6),
         ),
         child: InkWell(
           onTap: widget.onTap,
@@ -4415,8 +4498,11 @@ class _BreadcrumbChipState extends State<_BreadcrumbChip> {
             mainAxisSize: MainAxisSize.min,
             children: [
               widget.icon,
-              const SizedBox(width: 6),
-              Text(widget.label),
+              const SizedBox(width: 2),
+              Text(
+                widget.label,
+                style: textStyle,
+              ),
             ],
           ),
         ),
@@ -4457,6 +4543,7 @@ class _HoverAnimatedContainerState extends State<_HoverAnimatedContainer> {
         .colorScheme
         .primary
         .withValues(alpha: 0.18);
+    final shadowColor = Theme.of(context).shadowColor.withValues(alpha: 0.15);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -4475,6 +4562,15 @@ class _HoverAnimatedContainerState extends State<_HoverAnimatedContainer> {
                     .withValues(alpha: 0.35)
                 : Colors.transparent,
           ),
+          boxShadow: _hovered || widget.selected
+              ? [
+                  BoxShadow(
+                    color: shadowColor,
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : null,
         ),
         child: widget.child,
       ),
@@ -4495,6 +4591,7 @@ class _Sidebar extends StatelessWidget {
   final void Function(_CloudRemote remote) onUnmountRemote;
   final VoidCallback onRefreshRemotes;
   final void Function(String path) onNavigate;
+  final double panelOpacity;
 
   const _Sidebar({
     required this.currentPath,
@@ -4509,14 +4606,27 @@ class _Sidebar extends StatelessWidget {
     required this.onUnmountRemote,
     required this.onRefreshRemotes,
     required this.onNavigate,
+    required this.panelOpacity,
   });
 
   @override
   Widget build(BuildContext context) {
+    final headerStyle = Theme.of(context).textTheme.labelLarge?.copyWith(
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+        );
+    final sectionStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
+          letterSpacing: 0.6,
+          fontWeight: FontWeight.w600,
+          color: Theme.of(context).textTheme.bodySmall?.color,
+        );
     return Container(
-      width: 240,
+      width: 252,
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: Theme.of(context)
+            .colorScheme
+            .surface
+            .withValues(alpha: panelOpacity),
         border: Border(
           right: BorderSide(color: Theme.of(context).dividerColor),
         ),
@@ -4525,13 +4635,13 @@ class _Sidebar extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 18, 12, 10),
+            padding: const EdgeInsets.fromLTRB(16, 16, 12, 8),
             child: Row(
               children: [
                 Expanded(
                   child: Text(
-                    'Places',
-                    style: Theme.of(context).textTheme.titleLarge,
+                    'Lugares',
+                    style: headerStyle,
                   ),
                 ),
                 IconButton(
@@ -4558,16 +4668,16 @@ class _Sidebar extends StatelessWidget {
                 onRefreshRemotes: onRefreshRemotes,
                 onAddPlace: onAddPlace,
                 child: ListView(
-                  padding: const EdgeInsets.only(left: 8, right: 8, bottom: 8),
+                  padding: const EdgeInsets.only(left: 8, right: 8, bottom: 10),
                   children: [
                     ...places.map((place) {
                     final isSelected = currentPath == place.path;
                     if (place.isHeader) {
                       return Padding(
-                        padding: const EdgeInsets.fromLTRB(10, 12, 10, 6),
+                        padding: const EdgeInsets.fromLTRB(12, 12, 10, 6),
                         child: Text(
                           place.label,
-                          style: Theme.of(context).textTheme.bodySmall,
+                          style: sectionStyle,
                         ),
                       );
                     }
@@ -4610,6 +4720,13 @@ class _Sidebar extends StatelessWidget {
                           : null,
                       child: ListTile(
                         dense: true,
+                        visualDensity: VisualDensity.compact,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 2,
+                        ),
+                        minLeadingWidth: 22,
+                        horizontalTitleGap: 10,
                         leading: Icon(place.icon),
                         title: Text(place.label),
                         subtitle: place.subtitle != null
@@ -4637,9 +4754,9 @@ class _Sidebar extends StatelessWidget {
                         selectedTileColor: Theme.of(context)
                             .colorScheme
                             .primary
-                            .withValues(alpha: 0.12),
+                            .withValues(alpha: 0.14),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(12),
                         ),
                         onTap: () => onNavigate(place.path),
                         onLongPress:
@@ -4705,6 +4822,8 @@ class _AppMenuBar extends StatelessWidget {
   final VoidCallback onToggleTheme;
   final String dragDropDefaultAction;
   final ValueChanged<String> onDragDropActionChanged;
+  final double panelOpacity;
+  final VoidCallback onOpenPanelOpacity;
   final VoidCallback onRefreshRemotes;
   final VoidCallback onMountAll;
   final VoidCallback onUnmountAll;
@@ -4745,6 +4864,8 @@ class _AppMenuBar extends StatelessWidget {
     required this.onToggleTheme,
     required this.dragDropDefaultAction,
     required this.onDragDropActionChanged,
+    required this.panelOpacity,
+    required this.onOpenPanelOpacity,
     required this.onRefreshRemotes,
     required this.onMountAll,
     required this.onUnmountAll,
@@ -4769,6 +4890,23 @@ class _AppMenuBar extends StatelessWidget {
         children: [
           Expanded(
             child: MenuBar(
+              style: MenuStyle(
+                backgroundColor: WidgetStatePropertyAll(
+                  Theme.of(context).colorScheme.surface,
+                ),
+                elevation: const WidgetStatePropertyAll(0),
+                padding: const WidgetStatePropertyAll(
+                  EdgeInsets.symmetric(horizontal: 6),
+                ),
+                shape: WidgetStatePropertyAll(
+                  RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    side: BorderSide(
+                      color: Theme.of(context).dividerColor,
+                    ),
+                  ),
+                ),
+              ),
               children: [
                 SubmenuButton(
                   menuChildren: [
@@ -4830,8 +4968,13 @@ class _AppMenuBar extends StatelessWidget {
                       onChanged: (_) => onToggleGlobalSearch(),
                       child: const Text('Búsqueda global en /home'),
                     ),
+                    MenuItemButton(
+                      onPressed: onOpenPanelOpacity,
+                      child: Text(
+                        'Transparencia paneles · ${(panelOpacity * 100).round()}%',
+                      ),
+                    ),
                     SubmenuButton(
-                      child: const Text('Arrastrar y soltar'),
                       menuChildren: [
                         RadioMenuButton<String>(
                           value: 'ask',
@@ -4864,6 +5007,7 @@ class _AppMenuBar extends StatelessWidget {
                           child: const Text('Mover'),
                         ),
                       ],
+                      child: const Text('Arrastrar y soltar'),
                     ),
                     MenuItemButton(
                       onPressed:
@@ -5244,6 +5388,7 @@ class _Toolbar extends StatelessWidget {
   final VoidCallback onReindexGlobalSearch;
   final String dragDropDefaultAction;
   final VoidCallback onCycleDragDropAction;
+  final double panelOpacity;
 
   const _Toolbar({
     required this.canGoBack,
@@ -5268,15 +5413,21 @@ class _Toolbar extends StatelessWidget {
     required this.onReindexGlobalSearch,
     required this.dragDropDefaultAction,
     required this.onCycleDragDropAction,
+    required this.panelOpacity,
   });
 
   @override
   Widget build(BuildContext context) {
+    final activeColor = Theme.of(context).colorScheme.primary;
+    final activeBackground = activeColor.withValues(alpha: 0.18);
     return Container(
       height: 60,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: Theme.of(context)
+            .colorScheme
+            .surface
+            .withValues(alpha: panelOpacity),
         border: Border(
           bottom: BorderSide(color: Theme.of(context).dividerColor),
         ),
@@ -5399,10 +5550,27 @@ class _Toolbar extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: Theme.of(context).dividerColor),
                   ),
-                  child: IconButton(
-                    tooltip: isGrid ? 'Vista lista' : 'Vista cuadrícula',
-                    onPressed: onToggleView,
-                    icon: Icon(isGrid ? AppIcons.list : AppIcons.grid),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    curve: Curves.easeOutCubic,
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: isGrid ? activeBackground : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isGrid
+                            ? activeColor.withValues(alpha: 0.35)
+                            : Colors.transparent,
+                      ),
+                    ),
+                    child: IconButton(
+                      tooltip: isGrid ? 'Vista lista' : 'Vista cuadrícula',
+                      onPressed: onToggleView,
+                      icon: Icon(
+                        isGrid ? AppIcons.list : AppIcons.grid,
+                        color: isGrid ? activeColor : null,
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 4),
@@ -5598,6 +5766,7 @@ class _PathBar extends StatelessWidget {
   final bool isEditing;
   final VoidCallback onStartEdit;
   final void Function({required bool navigate}) onFinishEdit;
+  final double panelOpacity;
 
   const _PathBar({
     required this.path,
@@ -5607,6 +5776,7 @@ class _PathBar extends StatelessWidget {
     required this.isEditing,
     required this.onStartEdit,
     required this.onFinishEdit,
+    required this.panelOpacity,
   });
 
   @override
@@ -5618,9 +5788,12 @@ class _PathBar extends StatelessWidget {
           : 'Favoritos';
       return Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
+          color: Theme.of(context)
+              .colorScheme
+              .surface
+              .withValues(alpha: panelOpacity),
           border: Border(
             bottom: BorderSide(color: Theme.of(context).dividerColor),
           ),
@@ -5655,9 +5828,12 @@ class _PathBar extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: Theme.of(context)
+            .colorScheme
+            .surface
+            .withValues(alpha: panelOpacity),
         border: Border(
           bottom: BorderSide(color: Theme.of(context).dividerColor),
         ),
@@ -5691,7 +5867,7 @@ class _PathBar extends StatelessWidget {
                     ),
                     child: const Icon(AppIcons.folderOpen, size: 18),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 6),
                   Expanded(
                     child: TextField(
                       controller: pathController,
@@ -5734,8 +5910,8 @@ class _PathBar extends StatelessWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Wrap(
-                      spacing: 6,
-                      runSpacing: 4,
+                      spacing: 2,
+                      runSpacing: 2,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: parts.map((part) {
                         if (part == '/') {
@@ -5748,8 +5924,8 @@ class _PathBar extends StatelessWidget {
                         return _BreadcrumbChip(
                           label: part == '/' ? 'Root' : part,
                           icon: part == '/'
-                              ? const Icon(AppIcons.folder)
-                              : const Icon(AppIcons.chevronRight),
+                              ? const Icon(AppIcons.folder, size: 14)
+                              : const Icon(AppIcons.chevronRight, size: 14),
                           onTap: () => onNavigate(targetPath),
                         );
                       }).toList(),
@@ -5758,7 +5934,13 @@ class _PathBar extends StatelessWidget {
                   IconButton(
                     tooltip: 'Editar ruta',
                     onPressed: onStartEdit,
-                    icon: const Icon(AppIcons.edit),
+                    icon: const Icon(AppIcons.edit, size: 18),
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints(
+                      minWidth: 30,
+                      minHeight: 30,
+                    ),
                   ),
                 ],
               ),
@@ -5779,12 +5961,12 @@ class _ListView extends StatelessWidget {
   final _SortField sortField;
   final bool sortAscending;
   final void Function(_SortField field) onSort;
+  final double panelOpacity;
   final bool Function(String path) isCut;
   final Color? Function(String path) tagColorForPath;
   final String? Function(String path) gitStatusForPath;
 
   const _ListView({
-    super.key,
     required this.items,
     required this.selectedPaths,
     required this.onSelect,
@@ -5796,6 +5978,7 @@ class _ListView extends StatelessWidget {
     required this.sortField,
     required this.sortAscending,
     required this.onSort,
+    required this.panelOpacity,
     required this.isCut,
     required this.tagColorForPath,
     required this.gitStatusForPath,
@@ -5806,9 +5989,12 @@ class _ListView extends StatelessWidget {
     return Column(
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
+            color: Theme.of(context)
+                .colorScheme
+                .surfaceContainerHighest
+                .withValues(alpha: (panelOpacity - 0.05).clamp(0.6, 1.0)),
             border: Border(
               bottom: BorderSide(color: Theme.of(context).dividerColor),
             ),
@@ -5870,8 +6056,8 @@ class _ListView extends StatelessWidget {
                   child: _HoverAnimatedContainer(
                     selected: isSelected,
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 10,
+                      horizontal: 16,
+                      vertical: 8,
                     ),
                     child: Row(
                       children: [
@@ -5955,7 +6141,6 @@ class _GridView extends StatelessWidget {
   final String? Function(String path) gitStatusForPath;
 
   const _GridView({
-    super.key,
     required this.items,
     required this.selectedPaths,
     required this.onSelect,
@@ -5970,12 +6155,12 @@ class _GridView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GridView.builder(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       cacheExtent: 800,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 4,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 200,
+        crossAxisSpacing: 14,
+        mainAxisSpacing: 14,
         mainAxisExtent: 132,
       ),
       itemCount: items.length,
@@ -5984,6 +6169,9 @@ class _GridView extends StatelessWidget {
         final isSelected = selectedPaths.contains(item.path);
         final tagColor = tagColorForPath(item.path);
         final gitStatus = gitStatusForPath(item.path);
+        final labelStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+              height: 1.1,
+            );
         final tile = InkWell(
           onTap: () => onSelect(item, index, items),
           onDoubleTap: () => onOpen(item),
@@ -6019,7 +6207,7 @@ class _GridView extends StatelessWidget {
                                 item.isDirectory
                                     ? AppIcons.folder
                                     : AppIcons.file,
-                                size: 40,
+                                size: item.isDirectory ? 44 : 40,
                                 color: item.isDirectory
                                     ? Theme.of(context).colorScheme.primary
                                     : Theme.of(context).iconTheme.color,
@@ -6031,6 +6219,7 @@ class _GridView extends StatelessWidget {
                       height: 36,
                       child: Text(
                         item.name,
+                        style: labelStyle,
                         textAlign: TextAlign.center,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
@@ -6103,13 +6292,15 @@ class _StatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final labelStyle = theme.textTheme.labelSmall;
     return Container(
-      height: 32,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      height: 30,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: theme.colorScheme.surface,
         border: Border(
-          top: BorderSide(color: Theme.of(context).dividerColor),
+          top: BorderSide(color: theme.dividerColor),
         ),
       ),
       child: Row(
@@ -6120,6 +6311,7 @@ class _StatusBar extends StatelessWidget {
                   ? '$selectedCount seleccionado(s) · $itemCount de $totalCount elementos'
                   : '$itemCount de $totalCount elementos',
               overflow: TextOverflow.ellipsis,
+              style: labelStyle,
             ),
           ),
           Expanded(
@@ -6128,22 +6320,22 @@ class _StatusBar extends StatelessWidget {
                 if (globalSearchEnabled && globalSearchBuiltAt != null) ...[
                   Text(
                     'Índice: ${_formatDate(globalSearchBuiltAt!)}',
-                    style: Theme.of(context).textTheme.labelSmall,
+                    style: labelStyle,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                 ],
                 if (gitRoot != null) ...[
                   Text(
                     'Git: ${_basename(gitRoot!)}',
-                    style: Theme.of(context).textTheme.labelSmall,
+                    style: labelStyle,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                 ],
                 Text(
                   'Arrastrar: ${_dragDropLabel(dragDropDefaultAction)}',
-                  style: Theme.of(context).textTheme.labelSmall,
+                  style: labelStyle,
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
@@ -6155,6 +6347,7 @@ class _StatusBar extends StatelessWidget {
               currentPath,
               textAlign: TextAlign.right,
               overflow: TextOverflow.ellipsis,
+              style: labelStyle,
             ),
           ),
         ],
@@ -6191,14 +6384,21 @@ String _dragDropLabel(String value) {
 
 class _EmptyState extends StatelessWidget {
   final String message;
+  final String? subtitle;
+  final IconData? icon;
+  final bool isLoading;
 
   const _EmptyState({
-    super.key,
     required this.message,
+    this.subtitle,
+    this.icon,
+    this.isLoading = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tone = theme.colorScheme.primary.withValues(alpha: 0.12);
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -6206,20 +6406,40 @@ class _EmptyState extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
-              color: Theme.of(context)
-                  .colorScheme
-                  .primary
-                  .withValues(alpha: 0.12),
+              color: tone,
               shape: BoxShape.circle,
             ),
             child: Icon(
-              AppIcons.folderX,
+              icon ?? AppIcons.folderX,
               size: 40,
-              color: Theme.of(context).colorScheme.primary,
+              color: theme.colorScheme.primary,
             ),
           ),
           const SizedBox(height: 12),
-          Text(message, textAlign: TextAlign.center),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleMedium,
+          ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              subtitle!,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
+          if (isLoading) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.4,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -6241,11 +6461,15 @@ class _SortHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final labelStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
+          letterSpacing: 0.6,
+          fontWeight: FontWeight.w600,
+        );
     return InkWell(
       onTap: onTap,
       child: Row(
         children: [
-          Text(label, style: Theme.of(context).textTheme.bodyMedium),
+          Text(label, style: labelStyle),
           const SizedBox(width: 6),
           if (isActive)
             Icon(
@@ -6303,6 +6527,7 @@ class _DetailsPanel extends StatelessWidget {
   final Map<String, DateTime> historyLastVisited;
   final ValueChanged<String> onNavigate;
   final VoidCallback onClearHistory;
+  final double panelOpacity;
 
   const _DetailsPanel({
     super.key,
@@ -6322,31 +6547,36 @@ class _DetailsPanel extends StatelessWidget {
     required this.historyLastVisited,
     required this.onNavigate,
     required this.onClearHistory,
+    required this.panelOpacity,
   });
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Container(
-      width: 280,
+      width: 300,
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: theme.colorScheme.surface.withValues(alpha: panelOpacity),
         border: Border(
-          left: BorderSide(color: Theme.of(context).dividerColor),
+          left: BorderSide(color: theme.dividerColor),
         ),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(16),
         child: selectedItem == null
             ? Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Detalles', style: Theme.of(context).textTheme.titleLarge),
+                  Text(
+                    'Detalles',
+                    style: theme.textTheme.titleLarge,
+                  ),
                   const SizedBox(height: 12),
                   Text(
                     selectedCount > 1
                         ? 'Seleccionados: $selectedCount elementos.'
                         : 'Selecciona un elemento para ver sus propiedades.',
-                    style: Theme.of(context).textTheme.bodyMedium,
+                    style: theme.textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 18),
                   Expanded(
@@ -6365,85 +6595,101 @@ class _DetailsPanel extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Detalles', style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 16),
-                    if (isImageFile(selectedItem!))
-                      Center(
-                        child: Column(
-                          children: [
-                            GestureDetector(
-                              onTap: () => _showImagePreviewDialog(
-                                context,
-                                selectedItem!.path,
+                    Text('Detalles', style: theme.textTheme.titleLarge),
+                    const SizedBox(height: 12),
+                    _DetailsSection(
+                      title: 'Previsualización',
+                      child: isImageFile(selectedItem!)
+                          ? Center(
+                              child: Column(
+                                children: [
+                                  GestureDetector(
+                                    onTap: () => _showImagePreviewDialog(
+                                      context,
+                                      selectedItem!.path,
+                                    ),
+                                    child: _ImagePreview(
+                                      path: selectedItem!.path,
+                                      size: previewSize,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      IconButton(
+                                        tooltip: 'Zoom -',
+                                        onPressed: onZoomOut,
+                                        icon: const Icon(AppIcons.remove),
+                                      ),
+                                      Text(
+                                        '${previewSize.toInt()} px',
+                                        style: theme.textTheme.labelSmall,
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Zoom +',
+                                        onPressed: onZoomIn,
+                                        icon: const Icon(AppIcons.add),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ),
-                              child: _ImagePreview(
-                                path: selectedItem!.path,
-                                size: previewSize,
-                              ),
+                            )
+                          : _FilePreview(
+                              item: selectedItem!,
+                              fileService: fileService,
                             ),
-                            const SizedBox(height: 8),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                IconButton(
-                                  tooltip: 'Zoom -',
-                                  onPressed: onZoomOut,
-                                  icon: const Icon(AppIcons.remove),
-                                ),
-                                Text('${previewSize.toInt()} px'),
-                                IconButton(
-                                  tooltip: 'Zoom +',
-                                  onPressed: onZoomIn,
-                                  icon: const Icon(AppIcons.add),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      )
-                    else
-                      _FilePreview(
-                        item: selectedItem!,
-                        fileService: fileService,
-                      ),
+                    ),
                     const SizedBox(height: 12),
                     Text(
                       selectedItem!.name,
-                      style: Theme.of(context).textTheme.bodyLarge,
+                      style: theme.textTheme.titleMedium,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
+                    const SizedBox(height: 10),
+                    _DetailsSection(
+                      title: 'Propiedades',
+                      child: Column(
+                        children: [
+                          _TagDetailRow(
+                            label: 'Etiqueta',
+                            tagLabel: tagLabelForPath(selectedItem!.path),
+                            tagColor: tagColorForPath(selectedItem!.path),
+                          ),
+                          _DetailRow(
+                            label: 'Tipo',
+                            value:
+                                selectedItem!.isDirectory ? 'Carpeta' : 'Archivo',
+                          ),
+                          _DetailRow(
+                            label: 'Tamaño',
+                            value: selectedItem!.isDirectory
+                                ? '--'
+                                : formatBytes(selectedItem!.sizeBytes),
+                          ),
+                          _DetailRow(
+                            label: 'Modificado',
+                            value: formatDate(selectedItem!.modifiedAt),
+                          ),
+                          _DetailRow(
+                            label: 'Ruta',
+                            value: selectedItem!.path,
+                            selectable: true,
+                          ),
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 12),
-                    _TagDetailRow(
-                      label: 'Etiqueta',
-                      tagLabel: tagLabelForPath(selectedItem!.path),
-                      tagColor: tagColorForPath(selectedItem!.path),
-                    ),
-                    _DetailRow(
-                      label: 'Tipo',
-                      value: selectedItem!.isDirectory ? 'Carpeta' : 'Archivo',
-                    ),
-                    _DetailRow(
-                      label: 'Tamaño',
-                      value: selectedItem!.isDirectory
-                          ? '--'
-                          : formatBytes(selectedItem!.sizeBytes),
-                    ),
-                    _DetailRow(
-                      label: 'Modificado',
-                      value: formatDate(selectedItem!.modifiedAt),
-                    ),
-                    _DetailRow(
-                      label: 'Ruta',
-                      value: selectedItem!.path,
-                    ),
-                    const SizedBox(height: 16),
-                    _HistoryPanel(
-                      history: history,
-                      historyVisits: historyVisits,
-                      historyLastVisited: historyLastVisited,
-                      onNavigate: onNavigate,
-                      onClear: onClearHistory,
+                    _DetailsSection(
+                      child: _HistoryPanel(
+                        history: history,
+                        historyVisits: historyVisits,
+                        historyLastVisited: historyLastVisited,
+                        onNavigate: onNavigate,
+                        onClear: onClearHistory,
+                      ),
                     ),
                   ],
                 ),
@@ -6578,7 +6824,6 @@ class _FilePreview extends StatelessWidget {
     );
   }
 
-  Widget _metaRow(String label, String value) => _buildMetaRow(label, value);
 }
 
 class _PreviewFrame extends StatelessWidget {
@@ -6746,18 +6991,18 @@ class _MediaControls extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return StreamBuilder<bool>(
-      stream: player.streams.playing,
+      stream: player.stream.playing,
       initialData: false,
       builder: (context, playingSnap) {
         final isPlaying = playingSnap.data ?? false;
         return Column(
           children: [
             StreamBuilder<Duration>(
-              stream: player.streams.position,
+              stream: player.stream.position,
               initialData: Duration.zero,
               builder: (context, positionSnap) {
                 return StreamBuilder<Duration>(
-                  stream: player.streams.duration,
+                  stream: player.stream.duration,
                   initialData: Duration.zero,
                   builder: (context, durationSnap) {
                     final position = positionSnap.data ?? Duration.zero;
@@ -6883,23 +7128,37 @@ class _AudioMetadata extends StatelessWidget {
 class _DetailRow extends StatelessWidget {
   final String label;
   final String value;
+  final bool selectable;
 
-  const _DetailRow({required this.label, required this.value});
+  const _DetailRow({
+    required this.label,
+    required this.value,
+    this.selectable = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final labelStyle = Theme.of(context).textTheme.labelSmall;
+    final valueStyle = Theme.of(context).textTheme.bodySmall;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: Theme.of(context).textTheme.bodyMedium),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
+          Text(label, style: labelStyle),
+          const SizedBox(height: 3),
+          selectable
+              ? SelectableText(
+                  value,
+                  maxLines: 3,
+                  style: valueStyle,
+                )
+              : Text(
+                  value,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: valueStyle,
+                ),
         ],
       ),
     );
@@ -6920,34 +7179,67 @@ class _TagDetailRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final value = tagLabel ?? 'Sin etiqueta';
+    final labelStyle = Theme.of(context).textTheme.labelSmall;
+    final valueStyle = Theme.of(context).textTheme.bodySmall;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            flex: 2,
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.labelMedium,
-            ),
-          ),
-          Expanded(
-            flex: 4,
-            child: Row(
-              children: [
-                if (tagColor != null) ...[
-                  _TagDot(color: tagColor!, size: 10),
-                  const SizedBox(width: 6),
-                ],
-                Expanded(
-                  child: Text(
-                    value,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
+          Text(label, style: labelStyle),
+          const SizedBox(height: 3),
+          Row(
+            children: [
+              if (tagColor != null) ...[
+                _TagDot(color: tagColor!, size: 10),
+                const SizedBox(width: 6),
               ],
-            ),
+              Expanded(
+                child: Text(
+                  value,
+                  overflow: TextOverflow.ellipsis,
+                  style: valueStyle,
+                ),
+              ),
+            ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailsSection extends StatelessWidget {
+  final String? title;
+  final Widget child;
+
+  const _DetailsSection({
+    this.title,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (title != null) ...[
+            Text(
+              title!,
+              style: theme.textTheme.labelLarge,
+            ),
+            const SizedBox(height: 8),
+          ],
+          child,
         ],
       ),
     );
@@ -7088,8 +7380,10 @@ class _HistoryPanel extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              child:
-                  Text('Historial', style: Theme.of(context).textTheme.titleSmall),
+              child: Text(
+                'Historial',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
             ),
             TextButton(
               onPressed: onClear,
@@ -7119,6 +7413,8 @@ class _HistoryPanel extends StatelessWidget {
                 final lastVisited = historyLastVisited[path];
                 return ListTile(
                   dense: true,
+                  visualDensity: VisualDensity.compact,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                   leading: Icon(
                     AppIcons.folder,
                     size: 18,

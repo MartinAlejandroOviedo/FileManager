@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/painting.dart';
 import 'package:file_manager/ui/niceos_theme.dart';
 import 'package:file_manager/ui/splash_screen.dart';
 import 'package:media_kit/media_kit.dart';
