@@ -2,6 +2,9 @@
 
 File Manager moderno para NiceOS, enfocado en productividad en Linux.
 
+## Descargas
+- Paquetes .deb: https://github.com/MartinAlejandroOviedo/FileManager/tree/main/releases
+
 ## Capturas
 
 ![Vista principal](assets/screenshot/Captura%20de%20pantalla_20260129_220017.png)
