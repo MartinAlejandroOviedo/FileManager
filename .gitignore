@@ -5,5 +5,15 @@
 !/releases/
 !/releases/**
 
+# Keep docs and README
+!/docs/
+!/docs/**
+!/README.md
+
+# Keep screenshots folder
+!/assets/
+!/assets/screenshot/
+!/assets/screenshot/**
+
 # Keep gitignore itself
 !.gitignore
