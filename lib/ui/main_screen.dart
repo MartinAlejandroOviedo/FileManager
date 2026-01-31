@@ -73,7 +73,7 @@ class _MainScreenState extends State<MainScreen> {
   _ViewMode _viewMode = _ViewMode.list;
   bool _showDetailsPanel = true;
   bool _showHidden = false;
-  final bool _dualPane = true;
+  bool _dualPane = true;
   bool _globalSearchEnabled = false;
   bool _globalSearchLoading = false;
   String? _globalSearchError;
@@ -3378,6 +3378,13 @@ class _MainScreenState extends State<MainScreen> {
     _saveSettings();
   }
 
+  void _toggleDualPane() {
+    setState(() {
+      _dualPane = !_dualPane;
+    });
+    _saveSettings();
+  }
+
 
   void _loadSettings() {
     final file = File(_settingsPath());
@@ -3402,6 +3409,7 @@ class _MainScreenState extends State<MainScreen> {
       _previewSize = (data['previewSize'] as num?)?.toDouble() ?? _previewSize;
       _panelOpacity =
           (data['panelOpacity'] as num?)?.toDouble() ?? _panelOpacity;
+      _dualPane = data['dualPane'] as bool? ?? _dualPane;
       final sort = data['sortField'] as String?;
       _sortField = _SortField.values.firstWhere(
         (v) => v.name == sort,
@@ -3539,6 +3547,7 @@ class _MainScreenState extends State<MainScreen> {
       ),
       'dragDropDefaultAction': _dragDropDefaultAction,
       'panelOpacity': _panelOpacity,
+      'dualPane': _dualPane,
       'tabs': tabsData,
       'activeTabIndex': _activeTabIndex,
     };
@@ -3859,6 +3868,7 @@ class _MainScreenState extends State<MainScreen> {
                         isGrid: _viewMode == _ViewMode.grid,
                         showDetails: _showDetailsPanel,
                         showHidden: _showHidden,
+                        dualPane: _dualPane,
                         globalSearchEnabled: _globalSearchEnabled,
                         globalSearchLoading: _globalSearchLoading,
                         homePath: _homePath,
@@ -3888,6 +3898,7 @@ class _MainScreenState extends State<MainScreen> {
                           () => _showDetailsPanel = !_showDetailsPanel,
                         ),
                         onToggleHidden: _toggleHidden,
+                        onToggleDualPane: _toggleDualPane,
                         onSetViewList: () => _setViewMode(_ViewMode.list),
                         onSetViewGrid: () => _setViewMode(_ViewMode.grid),
                         onSortByName: () => _toggleSort(_SortField.name),
@@ -3942,6 +3953,7 @@ class _MainScreenState extends State<MainScreen> {
                         canGoBack: canGoBack,
                         canGoForward: canGoForward,
                         isGrid: _viewMode == _ViewMode.grid,
+                        dualPane: _dualPane,
                         onBack: _goBack,
                         onForward: _goForward,
                         onUp: _goUp,
@@ -3953,6 +3965,7 @@ class _MainScreenState extends State<MainScreen> {
                                 : _ViewMode.list,
                           );
                         },
+                        onToggleDualPane: _toggleDualPane,
                         onNewFolder: _createFolder,
                         onRename: _renameSelected,
                         onDelete: _deleteSelected,
@@ -4794,6 +4807,7 @@ class _AppMenuBar extends StatelessWidget {
   final bool isGrid;
   final bool showDetails;
   final bool showHidden;
+  final bool dualPane;
   final bool globalSearchEnabled;
   final bool globalSearchLoading;
   final String homePath;
@@ -4808,6 +4822,7 @@ class _AppMenuBar extends StatelessWidget {
   final VoidCallback onToggleGrid;
   final VoidCallback onToggleDetails;
   final VoidCallback onToggleHidden;
+  final VoidCallback onToggleDualPane;
   final VoidCallback onSetViewList;
   final VoidCallback onSetViewGrid;
   final VoidCallback onSortByName;
@@ -4836,6 +4851,7 @@ class _AppMenuBar extends StatelessWidget {
     required this.isGrid,
     required this.showDetails,
     required this.showHidden,
+    required this.dualPane,
     required this.globalSearchEnabled,
     required this.globalSearchLoading,
     required this.homePath,
@@ -4850,6 +4866,7 @@ class _AppMenuBar extends StatelessWidget {
     required this.onToggleGrid,
     required this.onToggleDetails,
     required this.onToggleHidden,
+    required this.onToggleDualPane,
     required this.onSetViewList,
     required this.onSetViewGrid,
     required this.onSortByName,
@@ -4946,6 +4963,11 @@ class _AppMenuBar extends StatelessWidget {
                     MenuItemButton(
                       onPressed: onSetViewGrid,
                       child: const Text('Vista cuadrícula'),
+                    ),
+                    CheckboxMenuButton(
+                      value: dualPane,
+                      onChanged: (_) => onToggleDualPane(),
+                      child: const Text('Dos paneles'),
                     ),
                     // toggle rápido (toolbar) permanece, aquí dejamos opciones directas
                     CheckboxMenuButton(
@@ -5369,11 +5391,13 @@ class _Toolbar extends StatelessWidget {
   final bool canGoBack;
   final bool canGoForward;
   final bool isGrid;
+  final bool dualPane;
   final VoidCallback onBack;
   final VoidCallback onForward;
   final VoidCallback onUp;
   final VoidCallback onRefresh;
   final VoidCallback onToggleView;
+  final VoidCallback onToggleDualPane;
   final VoidCallback onNewFolder;
   final VoidCallback onRename;
   final VoidCallback onDelete;
@@ -5394,11 +5418,13 @@ class _Toolbar extends StatelessWidget {
     required this.canGoBack,
     required this.canGoForward,
     required this.isGrid,
+    required this.dualPane,
     required this.onBack,
     required this.onForward,
     required this.onUp,
     required this.onRefresh,
     required this.onToggleView,
+    required this.onToggleDualPane,
     required this.onNewFolder,
     required this.onRename,
     required this.onDelete,
@@ -5569,6 +5595,37 @@ class _Toolbar extends StatelessWidget {
                       icon: Icon(
                         isGrid ? AppIcons.list : AppIcons.grid,
                         color: isGrid ? activeColor : null,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Theme.of(context).dividerColor),
+                  ),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    curve: Curves.easeOutCubic,
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: dualPane ? activeBackground : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: dualPane
+                            ? activeColor.withValues(alpha: 0.35)
+                            : Colors.transparent,
+                      ),
+                    ),
+                    child: IconButton(
+                      tooltip: dualPane ? '2 paneles' : '1 panel',
+                      onPressed: onToggleDualPane,
+                      icon: Icon(
+                        dualPane ? AppIcons.columns : AppIcons.square,
+                        color: dualPane ? activeColor : null,
                       ),
                     ),
                   ),

@@ -19,6 +19,8 @@ class AppIcons {
   static const IconData refresh = LucideIcons.refreshCw;
   static const IconData grid = LucideIcons.grid3x3;
   static const IconData list = LucideIcons.list;
+  static const IconData columns = LucideIcons.columns2;
+  static const IconData square = LucideIcons.square;
   static const IconData plus = LucideIcons.plus;
   static const IconData edit = LucideIcons.pencilLine;
   static const IconData arrowLeft = LucideIcons.arrowLeft;

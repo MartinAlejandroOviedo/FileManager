@@ -1,9 +1,11 @@
 # Changelog
 
 ## Unreleased
-- Eliminada la vista “Columnas” (solo Lista y Grilla).
-- Scripts de empaquetado .deb y release automático.
-- Iconos hicolor generados para empaquetado Linux.
+
+## 0.1.1
+- Toggle rápido para 1/2 paneles en la toolbar.
+- Persistencia de modo 1/2 paneles en ajustes.
+- Icono de paneles actualizado (columns-2 / square).
 
 ## 0.1.0
 - Primera versión funcional.
