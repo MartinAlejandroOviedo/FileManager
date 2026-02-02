@@ -12,14 +12,14 @@ File Manager moderno para NiceOS, enfocado en productividad en Linux.
 ![Preview y panel derecho](assets/screenshot/Captura%20de%20pantalla_20260129_220458.png)
 
 ## Características
-- Vistas: lista y grilla.
+- Vistas: lista, grilla y columnas.
 - Panel doble (dual‑pane) con drag & drop.
-- Tabs persistentes.
+- Tabs persistentes por carpeta.
 - Búsqueda local y global en /home.
 - Panel de detalles con preview (imagen, PDF, audio y video).
 - Favoritos, recientes y tags.
 - Integración con rclone (montaje de remotos).
-- Tema claro/oscuro.
+- Tema claro/oscuro con estilo NiceOS.
 
 ## Requisitos
 - Flutter 3.x
@@ -46,9 +46,15 @@ scripts/build_deb.sh
 ```
 Genera el paquete en `releases/`.
 
+## Generar paquete .rpm
+```bash
+scripts/build_deb.sh
+```
+Si `rpmbuild` está disponible, también genera el RPM en `releases/`.
+
 ## Release con versión
 ```bash
-scripts/release_deb.sh 0.1.1
+scripts/release_deb.sh 0.1.2
 ```
 - Actualiza `pubspec.yaml`.
 - Agrega entrada básica al `CHANGELOG.md`.

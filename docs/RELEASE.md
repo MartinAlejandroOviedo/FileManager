@@ -15,10 +15,11 @@ SemVer: `MAJOR.MINOR.PATCH`.
 
 ## Release automático
 ```bash
-scripts/release_deb.sh 0.1.1
+scripts/release_deb.sh 0.1.2
 ```
 - Actualiza versión y changelog.
 - Construye el .deb.
+- Si `rpmbuild` está disponible, también genera el .rpm.
 - Output en `releases/`.
 
 ## Build directo
