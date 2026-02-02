@@ -84,3 +84,88 @@ mkdir -p "$(dirname "$OUTPUT_DEB")"
 dpkg-deb --root-owner-group --build "$PKG_ROOT" "$OUTPUT_DEB"
 
 echo "DEB generado en: $OUTPUT_DEB"
+
+# Build rpm (optional if rpmbuild is available)
+RPMBUILD_BIN=$(command -v rpmbuild 2>/dev/null || true)
+if [ -z "$RPMBUILD_BIN" ]; then
+  echo "Aviso: rpmbuild no esta disponible en PATH, se omite la generacion de RPM." >&2
+  exit 0
+fi
+
+RPM_TOPDIR="/tmp/${PKG_NAME}_${VERSION}_rpm"
+RPM_BUILDROOT="${RPM_TOPDIR}/BUILDROOT"
+RPM_SPECS="${RPM_TOPDIR}/SPECS"
+RPM_RPMS="${RPM_TOPDIR}/RPMS"
+
+rm -rf "$RPM_TOPDIR"
+mkdir -p "$RPM_BUILDROOT" "$RPM_SPECS" "$RPM_RPMS"
+
+SPEC_FILE="${RPM_SPECS}/${PKG_NAME}.spec"
+cat > "$SPEC_FILE" <<EOF
+Name: ${PKG_NAME}
+Version: ${VERSION}
+Release: 1%{?dist}
+Summary: NiceOS File Manager
+License: MIT
+BuildArch: x86_64
+
+%description
+NiceOS File Manager.
+File manager for NiceOS.
+
+%prep
+# No sources to unpack
+
+%build
+# Nothing to build
+
+%install
+rm -rf %{buildroot}
+mkdir -p %{buildroot}/usr/lib/${APP_NAME}
+cp -a ${BUILD_DIR}/* %{buildroot}/usr/lib/${APP_NAME}/
+mkdir -p %{buildroot}/usr/bin
+ln -s /usr/lib/${APP_NAME}/${APP_NAME} %{buildroot}/usr/bin/${APP_NAME}
+mkdir -p %{buildroot}/usr/share/applications
+cat > %{buildroot}/usr/share/applications/${PKG_NAME}.desktop <<DESKTOP_EOF
+[Desktop Entry]
+Type=Application
+Name=${APP_TITLE}
+Comment=NiceOS File Manager
+Exec=/usr/lib/${APP_NAME}/${APP_NAME}
+Icon=${APP_NAME}
+Terminal=false
+Categories=Utility;FileManager;
+StartupNotify=true
+DESKTOP_EOF
+mkdir -p %{buildroot}/usr/share/icons/hicolor
+if [ -d "${ROOT_DIR}/assets/icon/hicolor" ]; then
+  cp -a ${ROOT_DIR}/assets/icon/hicolor/* %{buildroot}/usr/share/icons/hicolor/
+fi
+mkdir -p %{buildroot}/usr/share/licenses/${PKG_NAME}
+cp -a ${ROOT_DIR}/LICENSE %{buildroot}/usr/share/licenses/${PKG_NAME}/LICENSE
+
+%files
+%license /usr/share/licenses/${PKG_NAME}/LICENSE
+/usr/lib/${APP_NAME}
+/usr/bin/${APP_NAME}
+/usr/share/applications/${PKG_NAME}.desktop
+/usr/share/icons/hicolor
+
+%changelog
+* $(date +"%a %b %d %Y") ${MAINTAINER_NAME} <${MAINTAINER_EMAIL}> - ${VERSION}-1
+- Release
+EOF
+
+"$RPMBUILD_BIN" -bb "$SPEC_FILE" --define "_topdir ${RPM_TOPDIR}"
+
+RPM_OUTPUT=$(find "$RPM_RPMS" -type f -name "${PKG_NAME}-${VERSION}-*.rpm" | head -n1 || true)
+if [ -z "$RPM_OUTPUT" ]; then
+  echo "No se pudo localizar el RPM generado." >&2
+  exit 1
+fi
+
+OUTPUT_RPM="${ROOT_DIR}/releases/$(basename "$RPM_OUTPUT")"
+mkdir -p "$(dirname "$OUTPUT_RPM")"
+cp -f "$RPM_OUTPUT" "$OUTPUT_RPM"
+
+echo "RPM generado en: $OUTPUT_RPM"
