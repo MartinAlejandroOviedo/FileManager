@@ -35,8 +35,15 @@ class _SplashScreenState extends State<SplashScreen> {
     if (!mounted) {
       return;
     }
+    final version = info.version.trim();
+    final build = info.buildNumber.trim();
+    final label = version.isEmpty
+        ? ''
+        : (build.isEmpty || build == '0')
+            ? 'v$version'
+            : 'v$version+$build';
     setState(() {
-      _versionLabel = 'v${info.version} (${info.buildNumber})';
+      _versionLabel = label;
     });
   }
 

@@ -174,8 +174,15 @@ class _MainScreenState extends State<MainScreen> {
   Future<void> _loadVersion() async {
     final info = await PackageInfo.fromPlatform();
     if (!mounted) return;
+    final version = info.version.trim();
+    final build = info.buildNumber.trim();
+    final label = version.isEmpty
+        ? ''
+        : (build.isEmpty || build == '0')
+            ? version
+            : '$version+$build';
     setState(() {
-      _versionLabel = '${info.version} (${info.buildNumber})';
+      _versionLabel = label;
     });
   }
 

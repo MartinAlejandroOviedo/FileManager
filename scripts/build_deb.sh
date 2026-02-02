@@ -96,9 +96,12 @@ RPM_TOPDIR="/tmp/${PKG_NAME}_${VERSION}_rpm"
 RPM_BUILDROOT="${RPM_TOPDIR}/BUILDROOT"
 RPM_SPECS="${RPM_TOPDIR}/SPECS"
 RPM_RPMS="${RPM_TOPDIR}/RPMS"
+RPM_DBPATH="${RPM_TOPDIR}/rpmdb"
 
 rm -rf "$RPM_TOPDIR"
-mkdir -p "$RPM_BUILDROOT" "$RPM_SPECS" "$RPM_RPMS"
+mkdir -p "$RPM_BUILDROOT" "$RPM_SPECS" "$RPM_RPMS" "$RPM_DBPATH"
+
+CHANGELOG_DATE=$(LC_ALL=C date +"%a %b %d %Y")
 
 SPEC_FILE="${RPM_SPECS}/${PKG_NAME}.spec"
 cat > "$SPEC_FILE" <<EOF
@@ -152,11 +155,11 @@ cp -a ${ROOT_DIR}/LICENSE %{buildroot}/usr/share/licenses/${PKG_NAME}/LICENSE
 /usr/share/icons/hicolor
 
 %changelog
-* $(date +"%a %b %d %Y") ${MAINTAINER_NAME} <${MAINTAINER_EMAIL}> - ${VERSION}-1
+* ${CHANGELOG_DATE} ${MAINTAINER_NAME} <${MAINTAINER_EMAIL}> - ${VERSION}-1
 - Release
 EOF
 
-"$RPMBUILD_BIN" -bb "$SPEC_FILE" --define "_topdir ${RPM_TOPDIR}"
+"$RPMBUILD_BIN" -bb "$SPEC_FILE" --define "_topdir ${RPM_TOPDIR}" --define "_dbpath ${RPM_DBPATH}"
 
 RPM_OUTPUT=$(find "$RPM_RPMS" -type f -name "${PKG_NAME}-${VERSION}-*.rpm" | head -n1 || true)
 if [ -z "$RPM_OUTPUT" ]; then

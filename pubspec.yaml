@@ -1,5 +1,5 @@
 name: file_manager
-version: 0.1.1
+version: 0.1.2
 publish_to: 'none'
 description: File Manager modular para Linux con Flutter
 

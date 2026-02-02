@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.1.2
+## 0.1.2 - 2026-02-02
 - Documentación actualizada (README y guía de releases).
 - Build de paquetes RPM cuando `rpmbuild` está disponible.
 
