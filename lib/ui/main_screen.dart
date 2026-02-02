@@ -8,6 +8,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:file_manager/core/file_service.dart';
 import 'package:file_manager/models/file_item.dart';
 import 'package:file_manager/ui/app_branding.dart';
+import 'package:file_manager/ui/app_theme.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:file_manager/ui/app_icons.dart';
 import 'package:file_manager/utils/search_utils.dart';
@@ -3012,11 +3013,12 @@ class _MainScreenState extends State<MainScreen> {
     _ensureGlobalSearchIndex(force: true);
   }
 
-  void _toggleThemeMode() {
-    final current = themeController.mode;
-    final next =
-        current == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
-    themeController.setMode(next);
+  void _setThemeMode(ThemeMode mode) {
+    themeController.setMode(mode);
+  }
+
+  void _setTheme(String themeId) {
+    themeController.setThemeId(themeId);
   }
 
   void _cycleDragDropAction() {
@@ -3910,7 +3912,9 @@ class _MainScreenState extends State<MainScreen> {
                         onReindexGlobalSearch: _reindexGlobalSearch,
                         onToggleGlobalRoot: _toggleGlobalRoot,
                         onAddGlobalRoot: _promptAddGlobalRoot,
-                        onToggleTheme: _toggleThemeMode,
+                        themeId: themeController.themeId,
+                        onThemeChanged: _setTheme,
+                        onThemeModeChanged: _setThemeMode,
                         onRefreshRemotes: _loadRcloneRemotes,
                         onMountAll: () {
                           for (final remote in _cloudRemotes) {
@@ -4813,6 +4817,7 @@ class _AppMenuBar extends StatelessWidget {
   final String homePath;
   final List<String> globalSearchRoots;
   final ThemeMode themeMode;
+  final String themeId;
   final VoidCallback onNewFolder;
   final VoidCallback onUndo;
   final VoidCallback onRename;
@@ -4834,7 +4839,8 @@ class _AppMenuBar extends StatelessWidget {
   final VoidCallback onReindexGlobalSearch;
   final void Function(String root, bool enabled) onToggleGlobalRoot;
   final VoidCallback onAddGlobalRoot;
-  final VoidCallback onToggleTheme;
+  final ValueChanged<String> onThemeChanged;
+  final ValueChanged<ThemeMode> onThemeModeChanged;
   final String dragDropDefaultAction;
   final ValueChanged<String> onDragDropActionChanged;
   final double panelOpacity;
@@ -4857,6 +4863,7 @@ class _AppMenuBar extends StatelessWidget {
     required this.homePath,
     required this.globalSearchRoots,
     required this.themeMode,
+    required this.themeId,
     required this.onNewFolder,
     required this.onUndo,
     required this.onRename,
@@ -4878,7 +4885,8 @@ class _AppMenuBar extends StatelessWidget {
     required this.onReindexGlobalSearch,
     required this.onToggleGlobalRoot,
     required this.onAddGlobalRoot,
-    required this.onToggleTheme,
+    required this.onThemeChanged,
+    required this.onThemeModeChanged,
     required this.dragDropDefaultAction,
     required this.onDragDropActionChanged,
     required this.panelOpacity,
@@ -4980,10 +4988,56 @@ class _AppMenuBar extends StatelessWidget {
                       onChanged: (_) => onToggleHidden(),
                       child: const Text('Mostrar ocultos'),
                     ),
-                    CheckboxMenuButton(
-                      value: themeMode == ThemeMode.light,
-                      onChanged: (_) => onToggleTheme(),
-                      child: const Text('Tema claro'),
+                    SubmenuButton(
+                      menuChildren: [
+                        for (final theme in AppThemeRegistry.themes)
+                          RadioMenuButton<String>(
+                            value: theme.id,
+                            groupValue: themeId,
+                            onChanged: (value) {
+                              if (value != null) {
+                                onThemeChanged(value);
+                              }
+                            },
+                            child: Text(theme.name),
+                          ),
+                      ],
+                      child: const Text('Tema'),
+                    ),
+                    SubmenuButton(
+                      menuChildren: [
+                        RadioMenuButton<ThemeMode>(
+                          value: ThemeMode.system,
+                          groupValue: themeMode,
+                          onChanged: (value) {
+                            if (value != null) {
+                              onThemeModeChanged(value);
+                            }
+                          },
+                          child: const Text('Modo sistema'),
+                        ),
+                        RadioMenuButton<ThemeMode>(
+                          value: ThemeMode.light,
+                          groupValue: themeMode,
+                          onChanged: (value) {
+                            if (value != null) {
+                              onThemeModeChanged(value);
+                            }
+                          },
+                          child: const Text('Modo claro'),
+                        ),
+                        RadioMenuButton<ThemeMode>(
+                          value: ThemeMode.dark,
+                          groupValue: themeMode,
+                          onChanged: (value) {
+                            if (value != null) {
+                              onThemeModeChanged(value);
+                            }
+                          },
+                          child: const Text('Modo oscuro'),
+                        ),
+                      ],
+                      child: const Text('Modo'),
                     ),
                     CheckboxMenuButton(
                       value: globalSearchEnabled,

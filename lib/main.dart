@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:file_manager/ui/niceos_theme.dart';
 import 'package:file_manager/ui/splash_screen.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:file_manager/ui/theme_controller.dart';
@@ -25,8 +24,8 @@ class FileManagerApp extends StatelessWidget {
       builder: (context, _) => MaterialApp(
         title: 'File Manager',
         debugShowCheckedModeBanner: false,
-        theme: NiceOSTheme.lightThemeData,
-        darkTheme: NiceOSTheme.themeData,
+        theme: themeController.activeTheme.light,
+        darkTheme: themeController.activeTheme.dark,
         themeMode: themeController.mode,
         home: const SplashScreen(),
       ),
