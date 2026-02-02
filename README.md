@@ -14,6 +14,7 @@ File Manager moderno para NiceOS, enfocado en productividad en Linux.
 ## Características
 - Vistas: lista, grilla y columnas.
 - Panel doble (dual‑pane) con drag & drop (poco común en Linux).
+- Copy/paste como root (útil para operaciones de sistema).
 - Tabs persistentes por carpeta.
 - Búsqueda local y global en /home.
 - Panel de detalles con preview (imagen, PDF, audio y video).
